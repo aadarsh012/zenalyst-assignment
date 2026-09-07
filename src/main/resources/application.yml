@@ -30,6 +30,19 @@ spring:
     serialization:
       write-dates-as-timestamps: false
 
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+housing:
+  identity:
+    # Keys the token that stands in for an applicant's national identity number. Kept out of the
+    # database on purpose: a database compromise alone must not be enough to recover the numbers.
+    # Override in every real environment (env: HOUSING_IDENTITY_PEPPER); the application refuses
+    # to start with this value under a non-development profile.
+    pepper: ${HOUSING_IDENTITY_PEPPER:development-pepper-not-for-production}
+
 server:
   port: 8080
   error:

@@ -23,20 +23,30 @@ A result that is correct but unexplainable is a failed result.
 
 ## What is built
 
-A running Spring Boot service backed by PostgreSQL, with the schema baseline and the audit
-substrate in place:
+A running Spring Boot service backed by PostgreSQL that accepts applications through both
+channels and records every acceptance in a tamper-evident log.
 
-- **Scheme registry** — the root record for a housing scheme: its flats, its application window,
-  its status. Readable over HTTP.
+- **Application intake, online and on paper.** Online submissions are accepted over JSON; paper
+  forms typed up afterwards are imported as CSV, with a per-row report.
+- **Normalisation.** Names, phone numbers, emails and dates of birth are reduced to canonical
+  forms so that deduplication can compare them. National identity numbers are checked against
+  their Verhoeff check digit at the door.
+- **Identity numbers are never stored** — only a scheme-scoped HMAC token and the last four
+  digits ([ADR-0003](adr/0003-identity-numbers-are-never-stored.md)).
+- **Idempotency.** A retried or double-clicked submission returns the original response instead
+  of creating a second application
+  ([ADR-0004](adr/0004-idempotency-and-the-cost-of-exactly-once.md)).
+- **Submission date separated from data-entry date**, so a paper form handed in before the
+  deadline counts even when typed up weeks later
+  ([ADR-0005](adr/0005-submission-date-is-not-the-data-entry-date.md)).
 - **Append-only audit log** — a hash-chained `audit_event` table that refuses `UPDATE`, `DELETE`
-  and `TRUNCATE` at the database level.
+  and `TRUNCATE` at the database level, now actually being written to.
+- **Scheme registry** — the root record for a scheme: flats, application window, status.
 - **RFC 9457 error model** — every error is an `application/problem+json` document with a stable
   `type` URI; no whitelabel pages, no stack traces on public endpoints.
 - **Flyway-owned schema** — Hibernate validates against it and is never allowed to change it.
-- **Test harness** — architecture tests that need no Docker, and integration tests against a real
-  PostgreSQL 16 via Testcontainers.
 
-Not yet built: application intake, deduplication, eligibility, the rules engine, the allocator,
+Not yet built: deduplication, eligibility, the registry freeze, the rules engine, the allocator,
 the draw itself, and the transparency endpoints.
 
 ---
@@ -62,13 +72,25 @@ make schema         # print the current tables
 
 `make help` lists every target.
 
-### Running with Colima
+### Container runtime
 
-The `Makefile` detects Colima automatically and exports `DOCKER_HOST` and
-`TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` on your behalf. With Docker Desktop nothing is set and
-the defaults apply. If you have both installed, note that they compete over
-`~/.docker/config.json`; setting `DOCKER_HOST` explicitly, as the `Makefile` does, sidesteps the
-ambiguity entirely.
+Both `docker compose` and Testcontainers follow `DOCKER_HOST`, and the `Makefile` works out what
+to set:
+
+- **Docker Desktop** — nothing is set; the docker CLI finds Desktop's socket on its own. The
+  `Makefile` does add `~/.docker/bin` to `PATH`, because Desktop's `config.json` names
+  `credsStore: desktop` and the helper binary lives there. Without it, a docker CLI installed
+  from Homebrew cannot find the helper and *every* image pull fails — including public images
+  that need no credentials at all.
+- **Colima** — `DOCKER_HOST` and `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` are set explicitly,
+  because Colima's socket is somewhere the default lookup misses.
+- **An explicit `DOCKER_HOST` from you** always wins over both.
+
+**Do not leave both running at once.** Colima forwards published ports through an SSH tunnel that
+keeps listening after you switch, so `localhost:5432` can reach Colima's Postgres while
+`docker compose exec` reaches Desktop's. Migrations then apply to one database while the
+application talks to the other, and the symptom is a schema that Flyway insists is up to date but
+that has no tables in it. Run `colima stop` before switching.
 
 ---
 
@@ -78,11 +100,58 @@ ambiguity entirely.
 |---|---|---|
 | `GET` | `/api/v1/schemes` | List all schemes |
 | `GET` | `/api/v1/schemes/{code}` | One scheme by its code |
+| `POST` | `/api/v1/schemes/{code}/applications` | Submit an application online |
+| `POST` | `/api/v1/schemes/{code}/applications:import` | Import a CSV of paper applications |
+| `GET` | `/api/v1/applications/{applicationNo}` | Retrieve one application |
 | `GET` | `/actuator/health` | Liveness, including database connectivity |
 
+### Submitting online
+
 ```bash
-curl -s localhost:8080/api/v1/schemes
-curl -s localhost:8080/api/v1/schemes/MHS-2026
+curl -s -X POST localhost:8080/api/v1/schemes/MHS-2026/applications \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: my-key-1' \
+  -d '{
+    "fullName": "Ramesh Kumar",
+    "dateOfBirth": "1990-02-01",
+    "governmentId": "234567890124",
+    "phone": "+91 98765 43210",
+    "email": "ramesh@example.com",
+    "addressLine": "12 Nehru Road, Ward 7",
+    "wardCode": "W-07",
+    "category": "OBC",
+    "gender": "MALE",
+    "localResident": "true",
+    "disability": "false",
+    "exServiceperson": "false",
+    "annualIncome": "250000"
+  }'
+```
+
+Repeat that command verbatim: the response is identical and no second application is created.
+The `Idempotent-Replay` response header says which of the two happened. Change the body while
+reusing the key and the request is refused with `409` rather than answered with the earlier
+response.
+
+`governmentId` must carry a valid Verhoeff check digit. `234567890124` is valid;
+`234567890125` is the same number with one digit mistyped and is rejected.
+
+### Importing paper applications
+
+```bash
+curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/applications:import?enteredBy=clerk-3' \
+  -F 'file=@scripts/sample-paper-applications.csv'
+```
+
+The sample file contains five good rows and one deliberately broken one. The response is `200`
+with a per-row report — partial success is the normal case for a batch of hand-written forms, not
+an error. Re-run the same command: the rows that already landed come back as
+`ALREADY_IMPORTED` rather than being imported twice.
+
+### Reading an application back
+
+```bash
+curl -s localhost:8080/api/v1/applications/MHS-2026-000001
 curl -si localhost:8080/api/v1/schemes/NOPE     # 404 as application/problem+json
 ```
 
@@ -118,6 +187,21 @@ Two tables, both created by `V1__baseline.sql`.
 typed in after the window closes, and treating the typing date as the submission date would
 silently disqualify people who applied on time. That is precisely the class of defect this system
 exists to make impossible, so the distinction is in the schema from the start.
+
+**`application`** — one submitted application, from either channel.
+
+Applications are never modified and never deleted. A duplicate is not removed, it is linked; an
+ineligible application is not discarded, it is marked with its reasons. Four thousand people
+applied and the published result must account for all four thousand, so a row that has quietly
+vanished cannot be accounted for. The entity has no setters.
+
+The submission is kept verbatim in `raw_payload` alongside every normalised field, so that
+whatever the applicant actually wrote remains available if our parsing of it is ever disputed.
+The one exception is the identity number, which is redacted — see
+[ADR-0003](adr/0003-identity-numbers-are-never-stored.md).
+
+**`idempotency_record`** — the replay ledger. Written in the same transaction as the work it
+describes, so the two commit together.
 
 **`audit_event`** — an append-only, hash-chained record of every decision-affecting act.
 
@@ -178,9 +262,19 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
+105 tests: 75 unit and architecture tests that need no Docker, and 30 integration tests against
+a real PostgreSQL.
+
 | Suite | Count | Covers |
 |---|---|---|
+| `NormalisationTest` | 56 | names, phones, emails, dates, Verhoeff check digits |
+| `CanonicalJsonTest` | 8 | deterministic rendering: key order, numbers, escaping, code-point sorting |
+| `AuditHashTest` | 6 | hash determinism and what it depends on |
 | `ArchitectureTest` | 5 | package boundaries and allocator purity guardrails |
+| `OnlineIntakeIT` | 7 | acceptance, retrieval, accumulated validation errors, identity redaction |
+| `PaperImportIT` | 6 | partial failure, safe re-upload, receipt-vs-entry dates, quoted CSV fields |
+| `IdempotencyIT` | 4 | replay fidelity, key reuse, concurrent submission |
+| `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |
 

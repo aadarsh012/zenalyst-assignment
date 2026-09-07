@@ -33,6 +33,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    @ExceptionHandler(ValidationFailedException.class)
+    public ResponseEntity<ProblemDetail> handleValidationFailed(
+            ValidationFailedException ex, HttpServletRequest request) {
+
+        ProblemDetail body = base(ProblemType.VALIDATION_FAILED, ex.getMessage(), request.getRequestURI());
+        body.setProperty("violations", ex.violations().stream()
+                .sorted(java.util.Comparator.comparing(v -> v.field()))
+                .toList());
+        return ResponseEntity.status(ProblemType.VALIDATION_FAILED.status()).body(body);
+    }
+
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ProblemDetail> handleApiException(ApiException ex, HttpServletRequest request) {
         ProblemDetail body = base(ex.type(), ex.getMessage(), request.getRequestURI());
