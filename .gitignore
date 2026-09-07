@@ -1,0 +1,37 @@
+# Build output
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+nbproject/private/
+
+docs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local environment
+.env
+.env.local
+*.local.yml
+
+# Tooling that only works inside one person's editor session
+.claude/
+CLAUDE.local.md
+
+# Logs
+*.log
+logs/
+
+# jqwik (removed, but the file reappears if it is ever reintroduced)
+.jqwik-database
