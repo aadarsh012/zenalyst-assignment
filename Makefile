@@ -15,14 +15,31 @@ endif
 export JAVA_HOME
 export PATH := $(JAVA_HOME)/bin:$(PATH)
 
-# Colima exposes its socket outside the default location, and Testcontainers needs to be
-# told where the daemon lives and which socket to bind into the reaper container. If the
-# caller already set DOCKER_HOST, or Colima is not in use (e.g. Docker Desktop), leave it be.
-COLIMA_SOCK := $(HOME)/.colima/default/docker.sock
+# Container runtime. Both `docker compose` and Testcontainers follow DOCKER_HOST.
+#
+# Docker Desktop publishes a socket the docker CLI finds on its own, so when it is present
+# nothing needs setting and the default lookup is left alone. Colima puts its socket where the
+# default lookup misses it, so it — and only it — needs an explicit DOCKER_HOST, plus a hint
+# telling Testcontainers which socket path to mount into its reaper container.
+#
+# An explicit DOCKER_HOST from the caller always wins over both.
+# Docker Desktop keeps its credential helper in ~/.docker/bin, which is not on PATH when the
+# docker CLI came from Homebrew rather than from Desktop's own installer. Without it, config.json
+# names a credsStore ("desktop") whose binary cannot be found and every image pull fails — even
+# for public images that need no credentials at all.
+DOCKER_DESKTOP_BIN := $(HOME)/.docker/bin
+ifneq ($(wildcard $(DOCKER_DESKTOP_BIN)),)
+  export PATH := $(PATH):$(DOCKER_DESKTOP_BIN)
+endif
+
 ifeq ($(origin DOCKER_HOST), undefined)
-  ifneq ($(wildcard $(COLIMA_SOCK)),)
-    export DOCKER_HOST := unix://$(COLIMA_SOCK)
-    export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE := /var/run/docker.sock
+  DESKTOP_SOCK := $(HOME)/.docker/run/docker.sock
+  COLIMA_SOCK  := $(HOME)/.colima/default/docker.sock
+  ifeq ($(wildcard $(DESKTOP_SOCK)),)
+    ifneq ($(wildcard $(COLIMA_SOCK)),)
+      export DOCKER_HOST := unix://$(COLIMA_SOCK)
+      export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE := /var/run/docker.sock
+    endif
   endif
 endif
 

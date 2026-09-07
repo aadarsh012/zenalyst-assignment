@@ -12,3 +12,6 @@ evidence about how the system came to be shaped this way.
 |---|---|---|
 | [0001](0001-flyway-owns-the-schema.md) | Flyway owns the schema; Hibernate only validates | 0 |
 | [0002](0002-audit-log-is-append-only.md) | The audit log is append-only and hash-chained | 0 |
+| [0003](0003-identity-numbers-are-never-stored.md) | National identity numbers are never stored, only a scheme-scoped token | 1 |
+| [0004](0004-idempotency-and-the-cost-of-exactly-once.md) | The idempotency record commits with the work it describes | 1 |
+| [0005](0005-submission-date-is-not-the-data-entry-date.md) | The submission date is not the data-entry date | 1 |

@@ -1,0 +1,7 @@
+paper_reference,received_at,full_name,date_of_birth,government_id,phone,email,address_line,ward_code,category,gender,local_resident,disability,ex_serviceperson,annual_income
+RCPT-0001,2026-03-10,Ramesh Kumar,1990-02-01,234567890124,9876543210,ramesh@example.com,"12 Nehru Road, Ward 7",W-07,OBC,MALE,true,false,false,250000
+RCPT-0002,2026-03-10,Sita Devi,01/03/1985,345678901238,9876543211,sita.devi@gmail.com,"9 MG Road",W-02,SC,FEMALE,true,true,false,120000
+RCPT-0003,2026-03-11,Anil Verma,15-08-1978,456789012341,9876543212,anil@example.com,"1 Park Street",W-01,GEN,MALE,false,false,true,480000
+RCPT-0004,2026-03-11,Meena Iyer,1995-11-30,567890123458,9876543213,meena@example.com,"Flat 4, Block B, Nehru Nagar",W-05,EWS,FEMALE,true,false,false,90000
+RCPT-0005,2026-03-12,Joseph D'Souza,20 Jun 1982,678901234560,9876543214,joseph@example.com,"22 Church Lane",W-03,ST,MALE,true,false,false,310000
+RCPT-0006,2026-03-12,,1990-02-01,234567890125,not-a-phone,bad-email,,W-07,NOPE,MALE,true,false,false,twelve
