@@ -46,8 +46,15 @@ channels and records every acceptance in a tamper-evident log.
   `type` URI; no whitelabel pages, no stack traces on public endpoints.
 - **Flyway-owned schema** — Hibernate validates against it and is never allowed to change it.
 
-Not yet built: deduplication, eligibility, the registry freeze, the rules engine, the allocator,
-the draw itself, and the transparency endpoints.
+- **Deduplication.** Four tiers of matching resolve the people who applied more than once. The
+  three exact tiers merge automatically; resemblance is queued for a human and never acted on
+  alone ([ADR-0006](adr/0006-fuzzy-matches-are-never-merged-automatically.md)).
+- **Duplicates are linked, never deleted.** A set-aside application stays in the register,
+  readable, and can tell its applicant in plain English why it no longer competes and which of
+  their applications does.
+
+Not yet built: eligibility, the registry freeze, the rules engine, the allocator, the draw itself,
+and the transparency endpoints.
 
 ---
 
@@ -103,6 +110,10 @@ that has no tables in it. Run `colima stop` before switching.
 | `POST` | `/api/v1/schemes/{code}/applications` | Submit an application online |
 | `POST` | `/api/v1/schemes/{code}/applications:import` | Import a CSV of paper applications |
 | `GET` | `/api/v1/applications/{applicationNo}` | Retrieve one application |
+| `POST` | `/api/v1/schemes/{code}/deduplication:run` | Run a deduplication pass |
+| `GET` | `/api/v1/applications/{applicationNo}/identity` | Does this application still compete, and if not why |
+| `GET` | `/api/v1/schemes/{code}/duplicate-reviews` | The fuzzy matches awaiting a human |
+| `POST` | `/api/v1/duplicate-reviews/{id}/decision` | Record an operator's judgement |
 | `GET` | `/actuator/health` | Liveness, including database connectivity |
 
 ### Submitting online
@@ -147,6 +158,44 @@ The sample file contains five good rows and one deliberately broken one. The res
 with a per-row report — partial success is the normal case for a batch of hand-written forms, not
 an error. Re-run the same command: the rows that already landed come back as
 `ALREADY_IMPORTED` rather than being imported twice.
+
+### Deduplication
+
+```bash
+curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/deduplication:run?runBy=operator-1'
+```
+
+A pass over the whole register, not a check at intake: duplicates arrive out of order, and
+application 4,000 may be a duplicate of application 12. Safe to run repeatedly — the same register
+always produces the same conclusions
+([ADR-0007](adr/0007-duplicate-links-are-derived-not-accumulated.md)).
+
+Four tiers, in descending certainty:
+
+| Tier | Matches on | Merges automatically |
+|---|---|---|
+| `GOVERNMENT_ID` | the same identity number | yes |
+| `NAME_DOB_PHONE` | name, date of birth and phone | yes |
+| `NAME_DOB_EMAIL` | name, date of birth and email | yes |
+| `PROBABLE` | similar name, same date of birth | **no — queued for a human** |
+
+Matching is transitive. If A and B share an identity number and B and C share a phone number, all
+three are one person even though A and C have nothing in common. Merging pairs independently would
+leave that person holding two entries in a draw allowing one per household.
+
+```bash
+# what an applicant is told
+curl -s localhost:8080/api/v1/applications/MHS-2026-000002/identity
+
+# the review queue, and a decision
+curl -s 'localhost:8080/api/v1/schemes/MHS-2026/duplicate-reviews?status=PENDING'
+curl -s -X POST "localhost:8080/api/v1/duplicate-reviews/$REVIEW_ID/decision?decidedBy=clerk-anita" \
+  -H 'Content-Type: application/json' \
+  -d '{"outcome":"CONFIRMED_DUPLICATE","note":"Confirmed with applicant by phone."}'
+```
+
+A decision takes effect immediately, and the response is the fresh report. Rejections are
+remembered, so re-running never asks the same question twice.
 
 ### Reading an application back
 
@@ -203,6 +252,18 @@ The one exception is the identity number, which is redacted — see
 **`idempotency_record`** — the replay ledger. Written in the same transaction as the work it
 describes, so the two commit together.
 
+**`application_fingerprint`** — the match evidence, materialised. Two applications sharing a
+fingerprint at a tier agreed on exactly the fields that tier is made of. Stored rather than
+computed on the fly so that "why did you decide these were the same person?" is answered by a
+stored fact, not by a query someone has to be trusted about.
+
+**`duplicate_link`** — which applications were set aside, for which reason. Rebuilt on every run;
+the decisions behind it live in `duplicate_review` and the audit chain.
+
+**`duplicate_review`** — fuzzy matches and the human judgements on them. The only mutable entity in
+the system, and deliberately so: this is where a person decides something about another person's
+application, and it should be unambiguous who decided what and when.
+
 **`audit_event`** — an append-only, hash-chained record of every decision-affecting act.
 
 Each row carries `prev_hash`, the hash of its predecessor, and its own `hash` over its canonical
@@ -241,9 +302,17 @@ TRUNCATE audit_event;                        -- ERROR: audit_event is append-onl
 
 ```
 com.zenalyst.housing
-├── scheme/          the scheme record: entity, repository, read API
-└── platform/error/  RFC 9457 problem types and the global exception handler
+├── scheme/          the scheme: flats, application window, status
+├── intake/          both channels, normalisation, CSV import, idempotency
+├── normalisation/   pure functions reducing input to comparable form
+├── identity/        fingerprinting, the merge graph, the review queue
+├── audit/           the hash chain
+└── platform/        errors, hashing, idempotency, clock
 ```
+
+Every package carries a `package-info.java` saying what it does and which class to read first.
+Start with `identity/DeduplicationService` or `intake/IntakeService`; both read top to bottom as
+the whole of their story.
 
 Flyway owns the schema; Hibernate runs with `ddl-auto: validate` and never creates or alters a
 table. A mismatch between entities and schema fails application startup rather than being
@@ -262,8 +331,8 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
-105 tests: 75 unit and architecture tests that need no Docker, and 30 integration tests against
-a real PostgreSQL.
+132 tests: 90 unit and architecture tests that need no Docker, and 42 integration tests against a
+real PostgreSQL.
 
 | Suite | Count | Covers |
 |---|---|---|
@@ -274,6 +343,9 @@ a real PostgreSQL.
 | `OnlineIntakeIT` | 7 | acceptance, retrieval, accumulated validation errors, identity redaction |
 | `PaperImportIT` | 6 | partial failure, safe re-upload, receipt-vs-entry dates, quoted CSV fields |
 | `IdempotencyIT` | 4 | replay fidelity, key reuse, concurrent submission |
+| `MergeGraphTest` | 9 | transitivity, canonical selection, order-independence |
+| `FingerprintsTest` | 6 | determinism, tier separation, field-boundary forgery |
+| `DeduplicationIT` | 12 | all four tiers, review decisions, re-run idempotency |
 | `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |

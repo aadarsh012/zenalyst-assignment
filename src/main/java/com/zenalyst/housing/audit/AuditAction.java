@@ -19,5 +19,15 @@ public enum AuditAction {
     APPLICATION_RECEIVED,
 
     /** A batch of paper applications was imported; the payload carries the per-row tally. */
-    APPLICATION_BATCH_IMPORTED
+    APPLICATION_BATCH_IMPORTED,
+
+    /** A deduplication pass completed; the payload carries what it concluded. */
+    DEDUPLICATION_COMPLETED,
+
+    /**
+     * An operator judged a fuzzy match. Recorded per decision rather than per pass, because this
+     * is a person deciding something about another person's application and the chain should name
+     * who, when, and which way.
+     */
+    DUPLICATE_REVIEW_DECIDED
 }
