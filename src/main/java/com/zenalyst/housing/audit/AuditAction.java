@@ -51,6 +51,12 @@ public enum AuditAction {
     /** The result was declared final. */
     DRAW_PUBLISHED,
 
+    /** Somebody challenged a published result. */
+    OBJECTION_FILED,
+
+    /** An objection was adjudicated, with a written reason. */
+    OBJECTION_DECIDED,
+
     /**
      * An operator judged a fuzzy match. Recorded per decision rather than per pass, because this
      * is a person deciding something about another person's application and the chain should name

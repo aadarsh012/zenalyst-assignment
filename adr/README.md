@@ -23,3 +23,4 @@ evidence about how the system came to be shaped this way.
 | [0011](0011-commit-reveal-and-why-a-beacon-is-stronger.md) | Commit to the seed before revealing it — and why a beacon is stronger | 5 |
 | [0012](0012-the-draw-runs-as-a-job-with-retries-off.md) | The draw runs as a background job, with automatic retries off | 5 |
 | [0013](0013-explain-is-assembled-not-reconstructed.md) | The explanation is assembled from stored facts, never reconstructed | 6 |
+| [0014](0014-corrections-supersede-they-never-edit.md) | A wrong result is superseded, never corrected | 7 |

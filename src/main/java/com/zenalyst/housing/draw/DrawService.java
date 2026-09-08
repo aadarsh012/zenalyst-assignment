@@ -55,6 +55,7 @@ public class DrawService {
     private final AuditWriter audit;
     private final JobScheduler jobs;
     private final DrawExecutionJob executionJob;
+    private final SupersessionAuthority supersessionAuthority;
     private final Clock clock;
     private final Map<SeedSourceType, SeedSource> seedSources;
     private final SeedSourceType configuredSeedSource;
@@ -68,6 +69,7 @@ public class DrawService {
             AuditWriter audit,
             JobScheduler jobs,
             DrawExecutionJob executionJob,
+            SupersessionAuthority supersessionAuthority,
             Clock clock,
             List<SeedSource> availableSeedSources,
             @Value("${housing.draw.seed-source}") SeedSourceType configuredSeedSource) {
@@ -79,6 +81,7 @@ public class DrawService {
         this.audit = audit;
         this.jobs = jobs;
         this.executionJob = executionJob;
+        this.supersessionAuthority = supersessionAuthority;
         this.clock = clock;
         this.seedSources = availableSeedSources.stream()
                 .collect(java.util.stream.Collectors.toMap(SeedSource::type, source -> source));
@@ -93,6 +96,18 @@ public class DrawService {
      */
     @Transactional
     public DrawResponse commit(String schemeCode, String committedBy) {
+        return commit(schemeCode, committedBy, null);
+    }
+
+    /**
+     * Creates a draw, optionally superseding a published one.
+     *
+     * @param supersedesDrawId the published draw this replaces. Permitted only where an objection
+     *                         against it has been upheld — see
+     *                         {@link #requireSupersessionIsAuthorised}.
+     */
+    @Transactional
+    public DrawResponse commit(String schemeCode, String committedBy, UUID supersedesDrawId) {
         Scheme scheme = scheme(schemeCode);
         FrozenRegistry frozen = registry.latestFor(schemeCode);
         RuleVersion ruleVersion = rules.activeVersion(scheme);
@@ -107,16 +122,64 @@ public class DrawService {
                                     "status", inFlight.getStatus().name()));
                 });
 
+        if (supersedesDrawId != null) {
+            requireSupersessionIsAuthorised(scheme, supersedesDrawId);
+        }
+
         SeedSource source = sourceFor(configuredSeedSource);
         Draw draw = draws.saveAndFlush(Draw.commit(
                 scheme.getId(), frozen.getId(), frozen.getRegistryRoot(),
                 ruleVersion.getId(), ruleVersion.getRulesHash(),
-                source.type(), source.commit(), clock.instant(), committedBy));
+                source.type(), source.commit(), clock.instant(), committedBy, supersedesDrawId));
 
         audit.append(committedBy, AuditAction.DRAW_COMMITTED, "draw", draw.getId().toString(),
                 commitPayload(schemeCode, draw));
 
         return DrawResponse.of(draw, schemeCode, ruleVersion.getVersion());
+    }
+
+    /**
+     * Refuses a supersession that nobody asked for.
+     *
+     * <p>An authority able to re-draw at will can draw repeatedly until it likes the answer, and
+     * the commitment ceremony would not catch it — every individual draw would verify perfectly.
+     * Requiring an upheld objection makes replacing a result something that has to be asked for in
+     * writing, adjudicated in writing, and left in the audit trail.
+     *
+     * <p>An authority that finds its own error files its own objection and upholds it. That is not
+     * a loophole; it is the paper trail working as intended.
+     */
+    private void requireSupersessionIsAuthorised(Scheme scheme, UUID supersedesDrawId) {
+        Draw superseded = draws.findById(supersedesDrawId)
+                .orElseThrow(() -> ApiException.notFound("draw", supersedesDrawId.toString()));
+
+        if (!superseded.getSchemeId().equals(scheme.getId())) {
+            throw ApiException.conflict(
+                    "Draw %s belongs to a different scheme.".formatted(supersedesDrawId),
+                    Map.of("drawId", supersedesDrawId.toString()));
+        }
+        if (superseded.getStatus() != DrawStatus.PUBLISHED) {
+            throw ApiException.conflict(
+                    "Only a published draw can be superseded; draw %s is %s."
+                            .formatted(supersedesDrawId, superseded.getStatus()),
+                    Map.of("drawId", supersedesDrawId.toString(),
+                            "status", superseded.getStatus().name()));
+        }
+        draws.findBySupersedesDrawId(supersedesDrawId).ifPresent(existing -> {
+            throw ApiException.conflict(
+                    "Draw %s has already been superseded by draw %s."
+                            .formatted(supersedesDrawId, existing.getId()),
+                    Map.of("drawId", supersedesDrawId.toString(),
+                            "supersededBy", existing.getId().toString()));
+        });
+
+        if (!supersessionAuthority.isSupersessionAuthorised(supersedesDrawId)) {
+            throw ApiException.conflict(
+                    ("Draw %s cannot be superseded: no objection against it has been upheld. "
+                            + "A published result is replaced only where a challenge has been "
+                            + "accepted in writing.").formatted(supersedesDrawId),
+                    Map.of("drawId", supersedesDrawId.toString()));
+        }
     }
 
     @Transactional
@@ -205,7 +268,9 @@ public class DrawService {
                 .map(Scheme::getCode).orElse("unknown");
         String rulesVersion = ruleVersions.findById(draw.getRuleVersionId())
                 .map(RuleVersion::getVersion).orElse("unknown");
-        return DrawResponse.of(draw, schemeCode, rulesVersion);
+        String supersededBy = draws.findBySupersedesDrawId(draw.getId())
+                .map(successor -> successor.getId().toString()).orElse(null);
+        return DrawResponse.of(draw, schemeCode, rulesVersion, supersededBy);
     }
 
     private Draw lockedDraw(UUID drawId) {
@@ -247,6 +312,9 @@ public class DrawService {
             payload.put("seedCommitment", draw.getSeedCommitment());
         }
         payload.put("seedSource", draw.getSeedSource().name());
+        if (draw.getSupersedesDrawId() != null) {
+            payload.put("supersedes", draw.getSupersedesDrawId().toString());
+        }
         return payload;
     }
 

@@ -91,6 +91,17 @@ public class Draw {
     @Column(name = "failure_reason")
     private String failureReason;
 
+    /**
+     * The published draw this one replaces, if any.
+     *
+     * <p>One direction only, and that is forced rather than chosen: a published draw cannot be
+     * updated at all, so it cannot be marked as superseded. Which is exactly right — nothing about
+     * the original changes when it is replaced. It stays PUBLISHED, verifiable, and precisely what
+     * it always was.
+     */
+    @Column(name = "supersedes_draw_id", updatable = false)
+    private UUID supersedesDrawId;
+
     protected Draw() {
         // for JPA
     }
@@ -98,6 +109,14 @@ public class Draw {
     public static Draw commit(
             UUID schemeId, UUID registryId, String registryRoot, UUID ruleVersionId, String rulesHash,
             SeedSourceType seedSource, SeedSource.Commitment commitment, Instant at, String by) {
+        return commit(schemeId, registryId, registryRoot, ruleVersionId, rulesHash,
+                seedSource, commitment, at, by, null);
+    }
+
+    public static Draw commit(
+            UUID schemeId, UUID registryId, String registryRoot, UUID ruleVersionId, String rulesHash,
+            SeedSourceType seedSource, SeedSource.Commitment commitment, Instant at, String by,
+            UUID supersedesDrawId) {
 
         Draw draw = new Draw();
         draw.id = UUID.randomUUID();
@@ -117,6 +136,7 @@ public class Draw {
         draw.status = DrawStatus.COMMITTED;
         draw.committedAt = at;
         draw.committedBy = by;
+        draw.supersedesDrawId = supersedesDrawId;
         return draw;
     }
 
@@ -255,5 +275,9 @@ public class Draw {
 
     public String getFailureReason() {
         return failureReason;
+    }
+
+    public UUID getSupersedesDrawId() {
+        return supersedesDrawId;
     }
 }
