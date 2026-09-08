@@ -60,6 +60,34 @@ housing:
     # quota matrix, into a versioned rule document; it lives here until then.
     ews-annual-income-limit: 300000
 
+  draw:
+    # AUTHORITY_COMMITTED proves the seed did not change after it was published.
+    # DRAND_BEACON proves it was never the authority's to choose. See ADR-0011 for the trade:
+    # the second is stronger and depends on a third party being reachable.
+    seed-source: ${HOUSING_DRAW_SEED_SOURCE:AUTHORITY_COMMITTED}
+    beacon:
+      base-url: ${HOUSING_DRAW_BEACON_URL:https://api.drand.sh}
+      # How far ahead to commit. drand produces a round every 30 seconds, so 20 rounds is about ten
+      # minutes — long enough that the round cannot already be in flight, short enough that the
+      # ceremony does not stall.
+      lead-rounds: 20
+
+# JobRunr keeps its own tables in its own schema. Everything in `public` is ours and belongs to
+# Flyway (ADR-0001); a library that versions its own storage keeps it out of our namespace.
+jobrunr:
+  database:
+    type: sql
+    table-prefix: jobrunr.
+  background-job-server:
+    enabled: true
+    # JobRunr's floor is five seconds. It sets how long after enqueueing a draw actually starts.
+    poll-interval-in-seconds: 5
+  dashboard:
+    enabled: true
+    port: 8000
+  miscellaneous:
+    allow-anonymous-data-usage: false
+
 server:
   port: 8080
   error:

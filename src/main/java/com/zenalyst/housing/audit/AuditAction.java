@@ -36,6 +36,21 @@ public enum AuditAction {
     /** A quota matrix was put in force, superseding its predecessor. */
     RULE_VERSION_ACTIVATED,
 
+    /** A draw was created: register, rules and seed commitment fixed. The seed is not in the payload. */
+    DRAW_COMMITTED,
+
+    /** The seed was disclosed. The payload carries it, because it is public from this moment. */
+    DRAW_SEED_REVEALED,
+
+    /** The allocation was computed and persisted. */
+    DRAW_EXECUTED,
+
+    /** Execution failed and was rolled back. */
+    DRAW_FAILED,
+
+    /** The result was declared final. */
+    DRAW_PUBLISHED,
+
     /**
      * An operator judged a fuzzy match. Recorded per decision rather than per pass, because this
      * is a person deciding something about another person's application and the chain should name

@@ -156,6 +156,12 @@ class DryRunIT extends AbstractIntegrationTest {
         activate("v1");
         freeze();
 
+        // Counted as a delta, not an absolute. Integration tests share one database and other
+        // tests legitimately create draws; an absolute count would make this assertion depend
+        // on which tests happened to run first.
+        Integer drawEventsBefore = jdbc.queryForObject(
+                "SELECT count(*) FROM audit_event WHERE action LIKE 'DRAW%'", Integer.class);
+
         JsonNode result = dryRun("rehearsal-seed");
 
         assertThat(result.path("persisted").asBoolean()).isFalse();
@@ -164,10 +170,15 @@ class DryRunIT extends AbstractIntegrationTest {
         assertThat(result.path("rulesVersion").asText()).isEqualTo("v1");
         assertThat(result.path("registryRoot").asText()).matches("^[0-9a-f]{64}$");
 
-        // Nothing at all was written: no allotment table exists yet, and no audit event was added.
-        Integer drawEvents = jdbc.queryForObject(
+        // Nothing was written: not one audit event added, and no draw row for this scheme.
+        Integer drawEventsAfter = jdbc.queryForObject(
                 "SELECT count(*) FROM audit_event WHERE action LIKE 'DRAW%'", Integer.class);
-        assertThat(drawEvents).isZero();
+        assertThat(drawEventsAfter).isEqualTo(drawEventsBefore);
+
+        Integer draws = jdbc.queryForObject(
+                "SELECT count(*) FROM draw d JOIN scheme s ON s.id = d.scheme_id WHERE s.code = ?",
+                Integer.class, scheme);
+        assertThat(draws).isZero();
     }
 
     @Test
