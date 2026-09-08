@@ -43,6 +43,15 @@ housing:
     # to start with this value under a non-development profile.
     pepper: ${HOUSING_IDENTITY_PEPPER:development-pepper-not-for-production}
 
+  deduplication:
+    # Trigram similarity above which two same-birthday names are put in front of a human.
+    # 0.80 pairs "RAMESH KUMAR" with "RAMESH KUMARR" but not with "RAJESH KUMAR".
+    # Lowering it raises recall and the operator's workload; raising it lets duplicates through.
+    # Nothing at this tier is ever merged automatically, so the cost of a false positive is a
+    # human glancing at two names, and the cost of a false negative is someone holding two
+    # tickets in the draw. It is set to err towards the former.
+    name-similarity-threshold: 0.80
+
 server:
   port: 8080
   error:

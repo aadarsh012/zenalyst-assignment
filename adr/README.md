@@ -15,3 +15,5 @@ evidence about how the system came to be shaped this way.
 | [0003](0003-identity-numbers-are-never-stored.md) | National identity numbers are never stored, only a scheme-scoped token | 1 |
 | [0004](0004-idempotency-and-the-cost-of-exactly-once.md) | The idempotency record commits with the work it describes | 1 |
 | [0005](0005-submission-date-is-not-the-data-entry-date.md) | The submission date is not the data-entry date | 1 |
+| [0006](0006-fuzzy-matches-are-never-merged-automatically.md) | Fuzzy matches are never merged automatically | 2 |
+| [0007](0007-duplicate-links-are-derived-not-accumulated.md) | Duplicate links are rebuilt on every run, not accumulated | 2 |
