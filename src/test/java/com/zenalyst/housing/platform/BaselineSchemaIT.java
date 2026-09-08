@@ -3,6 +3,10 @@ package com.zenalyst.housing.platform;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.zenalyst.housing.audit.AuditAction;
+import com.zenalyst.housing.audit.AuditEvent;
+import com.zenalyst.housing.audit.AuditWriter;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -11,6 +15,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Verifies the two claims the baseline migration makes: that Flyway owns the schema, and
@@ -24,14 +30,31 @@ import org.springframework.jdbc.core.JdbcTemplate;
  */
 class BaselineSchemaIT extends AbstractIntegrationTest {
 
-    private static final String GENESIS = "0".repeat(64);
-    private static final String SOME_HASH = "a".repeat(64);
-
     @Autowired
     private JdbcTemplate jdbc;
 
     @Autowired
     private DataSource dataSource;
+
+    @Autowired
+    private AuditWriter auditWriter;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    /**
+     * Appends through the real {@link AuditWriter} rather than by raw INSERT.
+     *
+     * <p>Hand-inserted rows with invented hashes would break the chain for every test that runs
+     * afterwards against this shared database — and would break it in exactly the way a genuine
+     * tamper does, which is a confusing thing to leave lying around in a test suite whose job is
+     * to detect tampering.
+     */
+    private AuditEvent append(String actor) {
+        return new TransactionTemplate(transactionManager).execute(status -> auditWriter.append(
+                actor, AuditAction.APPLICATION_RECEIVED, "test-subject", "BASELINE-IT",
+                JsonNodeFactory.instance.objectNode().put("origin", "BaselineSchemaIT")));
+    }
 
     @Test
     @DisplayName("Flyway applied the baseline migration successfully")
@@ -57,44 +80,45 @@ class BaselineSchemaIT extends AbstractIntegrationTest {
     @Test
     @DisplayName("audit_event accepts inserts")
     void auditAcceptsInserts() {
-        insertAuditEvent(GENESIS, SOME_HASH);
+        AuditEvent event = append("baseline-insert");
 
         Integer count = jdbc.queryForObject(
-                "SELECT count(*) FROM audit_event WHERE hash = ?", Integer.class, SOME_HASH);
+                "SELECT count(*) FROM audit_event WHERE hash = ?", Integer.class, event.hash());
         assertThat(count).isEqualTo(1);
     }
 
     @Test
     @DisplayName("audit_event refuses UPDATE")
     void auditRefusesUpdate() {
-        String hash = "b".repeat(64);
-        insertAuditEvent(GENESIS, hash);
+        AuditEvent event = append("baseline-update");
 
-        assertThatThrownBy(() -> jdbc.update("UPDATE audit_event SET actor = 'tampered' WHERE hash = ?", hash))
+        assertThatThrownBy(() -> jdbc.update(
+                "UPDATE audit_event SET actor = 'tampered' WHERE hash = ?", event.hash()))
                 .hasMessageContaining("append-only");
 
         String actor = jdbc.queryForObject(
-                "SELECT actor FROM audit_event WHERE hash = ?", String.class, hash);
-        assertThat(actor).isNotEqualTo("tampered");
+                "SELECT actor FROM audit_event WHERE hash = ?", String.class, event.hash());
+        assertThat(actor).isEqualTo("baseline-update");
     }
 
     @Test
     @DisplayName("audit_event refuses DELETE")
     void auditRefusesDelete() {
-        String hash = "c".repeat(64);
-        insertAuditEvent(GENESIS, hash);
+        AuditEvent event = append("baseline-delete");
 
-        assertThatThrownBy(() -> jdbc.update("DELETE FROM audit_event WHERE hash = ?", hash))
+        assertThatThrownBy(() -> jdbc.update(
+                "DELETE FROM audit_event WHERE hash = ?", event.hash()))
                 .hasMessageContaining("append-only");
 
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM audit_event WHERE hash = ?", Integer.class, hash))
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM audit_event WHERE hash = ?", Integer.class, event.hash()))
                 .isEqualTo(1);
     }
 
     @Test
     @DisplayName("audit_event refuses TRUNCATE")
     void auditRefusesTruncate() throws SQLException {
-        insertAuditEvent(GENESIS, "d".repeat(64));
+        append("baseline-truncate");
 
         // TRUNCATE is DDL and is not routed through JdbcTemplate.update's DML path, so it is
         // issued directly — a statement-level trigger is the only thing that stops it.
@@ -106,12 +130,5 @@ class BaselineSchemaIT extends AbstractIntegrationTest {
 
         assertThat(jdbc.queryForObject("SELECT count(*) FROM audit_event", Integer.class))
                 .isGreaterThan(0);
-    }
-
-    private void insertAuditEvent(String prevHash, String hash) {
-        jdbc.update("""
-                INSERT INTO audit_event (occurred_at, actor, action, subject_type, subject_id, payload, prev_hash, hash)
-                VALUES (now(), 'test', 'TEST_EVENT', 'test', 'test-1', '{}'::jsonb, ?, ?)
-                """, prevHash, hash);
     }
 }

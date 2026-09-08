@@ -1,0 +1,23 @@
+package com.zenalyst.housing.audit;
+
+/**
+ * The catalogue of acts worth recording.
+ *
+ * <p>An enum rather than free text, because the audit log is queried and reasoned about, and a
+ * log containing both {@code APPLICATION_RECEIVED} and {@code application received} is a log
+ * nobody can answer questions from. Names are permanent: they appear in stored events that can
+ * never be rewritten.
+ *
+ * <p>Only acts that change what the system will decide belong here. A malformed submission that
+ * was rejected at the door, or a retried request that replayed an earlier response, changed
+ * nothing about anyone's chances and is not recorded — filling the chain with those would bury
+ * the events a reviewer actually needs to read.
+ */
+public enum AuditAction {
+
+    /** An application was accepted into the system and now competes for a flat. */
+    APPLICATION_RECEIVED,
+
+    /** A batch of paper applications was imported; the payload carries the per-row tally. */
+    APPLICATION_BATCH_IMPORTED
+}

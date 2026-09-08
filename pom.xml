@@ -19,6 +19,7 @@
 
     <properties>
         <java.version>17</java.version>
+        <commons-csv.version>1.14.1</commons-csv.version>
         <flyway.url>jdbc:postgresql://localhost:5432/housing</flyway.url>
         <flyway.user>housing</flyway.user>
         <flyway.password>housing</flyway.password>
@@ -56,6 +57,14 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- Paper applications arrive as CSV typed up by clerks. Addresses contain commas, and
+             quoted fields contain newlines; RFC 4180 is not something to hand-roll. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>${commons-csv.version}</version>
         </dependency>
 
         <!-- test -->
