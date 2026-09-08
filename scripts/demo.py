@@ -41,8 +41,8 @@ class Api:
         return self.tokens[key]
 
     def call(self, method, path, body=None, as_role=None, subject=None, raw=False,
-             content_type="application/json", expect=(200, 201, 202)):
-        headers = {}
+             content_type="application/json", expect=(200, 201, 202), headers=None):
+        headers = dict(headers or {})
         if as_role:
             headers["Authorization"] = "Bearer " + self.token(subject or as_role.lower(), [as_role])
         if body is not None and not raw:
@@ -120,8 +120,13 @@ def main():
     online = [json.loads(line) for line in (out / "online.ndjson").read_text().splitlines()]
     for record in online:
         ref = record.pop("ref")
+        # The key is derived from the scheme and the applicant's reference rather than generated
+        # per call, so running the demo twice replays these submissions instead of creating a
+        # second application for every online applicant. This is the endpoint's advertised
+        # behaviour; the demo should be using it.
         created = api.call("POST", f"/api/v1/schemes/{args.scheme}/applications",
-                           body=json.dumps(record))
+                           body=json.dumps(record),
+                           headers={"Idempotency-Key": f"{args.scheme}:{ref}"})
         ref_to_application[ref] = created["applicationNo"]
     print(f"   {len(online):,} submitted")
 
@@ -151,14 +156,25 @@ def main():
     seats = {"OPEN": args.flats // 2, "OBC": int(args.flats * 0.27),
              "SC": int(args.flats * 0.15), "ST": int(args.flats * 0.07)}
     seats["EWS"] = args.flats - sum(seats.values())
+    # A rule version is immutable once written, so a second run of the demo against the same
+    # scheme publishes the next version rather than failing on the name. That is what the endpoint
+    # is for: quota matrices supersede each other, they are never edited.
+    existing = {r["version"] for r
+                in api.call("GET", f"/api/v1/schemes/{args.scheme}/rules", as_role="ADMIN")}
+    number = 1
+    while f"v{number}" in existing:
+        number += 1
+    version = f"v{number}"
+
     api.call("POST", f"/api/v1/schemes/{args.scheme}/rules?createdBy=registrar-1", as_role="ADMIN",
-             body=json.dumps({"version": "v1", "seats": seats, "horizontalReservations": [
+             body=json.dumps({"version": version, "seats": seats, "horizontalReservations": [
                  {"category": "WOMEN", "share": 0.30}, {"category": "PWD", "share": 0.05},
                  {"category": "EX_SERVICE", "share": 0.03},
                  {"category": "LOCAL_RESIDENT", "share": 0.20}]}))
-    api.call("POST", f"/api/v1/schemes/{args.scheme}/rules/v1:activate?activatedBy=registrar-1",
+    api.call("POST",
+             f"/api/v1/schemes/{args.scheme}/rules/{version}:activate?activatedBy=registrar-1",
              as_role="ADMIN")
-    print(f"   {seats}")
+    print(f"   {version}: {seats}")
 
     step(8, "Freezing the register")
     frozen = api.call("POST", f"/api/v1/schemes/{args.scheme}/registry:freeze?frozenBy=registrar-1",
@@ -167,6 +183,25 @@ def main():
     print(f"   {frozen['candidateCount']:,} candidates, {frozen['eligibleCount']:,} eligible")
 
     step(9, "Committing to a seed")
+    # A draw left COMMITTED, REVEALED or RUNNING blocks every later draw for the scheme, and no
+    # endpoint abandons one, so a demo interrupted between commit and completion would wedge its
+    # scheme for good. Finish whatever is in flight first. COMPLETED and FAILED do not block.
+    for stale in api.call("GET", f"/api/v1/schemes/{args.scheme}/draws"):
+        if stale["status"] not in ("COMMITTED", "REVEALED", "RUNNING"):
+            continue
+        print(f"   finishing an interrupted draw first: {stale['drawId']} ({stale['status']})")
+        if stale["status"] == "COMMITTED":
+            api.call("POST", f"/api/v1/draws/{stale['drawId']}/reveal?revealedBy=registrar-1",
+                     as_role="ADMIN")
+        if stale["status"] in ("COMMITTED", "REVEALED"):
+            api.call("POST", f"/api/v1/draws/{stale['drawId']}/execute?executedBy=registrar-1",
+                     as_role="ADMIN")
+        for _ in range(120):
+            if api.call("GET", f"/api/v1/draws/{stale['drawId']}")["status"] in (
+                    "COMPLETED", "FAILED"):
+                break
+            time.sleep(1)
+
     draw = api.call("POST", f"/api/v1/schemes/{args.scheme}/draws?committedBy=registrar-1",
                     as_role="ADMIN")
     draw_id = draw["drawId"]
