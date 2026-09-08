@@ -12,7 +12,7 @@ public interface DuplicateLinkRepository extends JpaRepository<DuplicateLink, UU
 
     List<DuplicateLink> findByCanonicalApplicationId(UUID canonicalApplicationId);
 
-    long countBySchemeId(UUID schemeId);
+    List<DuplicateLink> findBySchemeId(UUID schemeId);
 
     /**
      * Clears the scheme's links so a run can rewrite them. Safe because links are derived: the

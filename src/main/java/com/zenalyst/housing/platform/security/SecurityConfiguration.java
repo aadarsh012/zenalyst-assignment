@@ -6,6 +6,7 @@ import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -13,6 +14,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
@@ -48,9 +50,16 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfiguration {
 
     private final String secret;
+    private final String issuer;
+    private final Environment environment;
 
-    public SecurityConfiguration(@Value("${housing.security.jwt.secret}") String secret) {
+    public SecurityConfiguration(
+            @Value("${housing.security.jwt.secret}") String secret,
+            @Value("${housing.security.jwt.issuer}") String issuer,
+            Environment environment) {
         this.secret = secret;
+        this.issuer = issuer;
+        this.environment = environment;
     }
 
     @Bean
@@ -59,63 +68,86 @@ public class SecurityConfiguration {
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(authorize -> authorize
-
-                        // --- open to everybody, on purpose -------------------------------------
-                        // The endpoints by which this system is checked. Requiring credentials here
-                        // would defeat the point of publishing anything.
-                        .requestMatchers(HttpMethod.POST, "/api/v1/draws/*/verify").permitAll()
-                        .requestMatchers(HttpMethod.GET,
-                                "/api/v1/audit/verify",
-                                "/api/v1/draws/*/results.csv",
-                                "/api/v1/registry/**",
-                                "/api/v1/schemes",
-                                "/api/v1/schemes/*",
-                                "/api/v1/schemes/*/draws",
-                                "/api/v1/draws/*").permitAll()
-
-                        // Applying, and objecting to a result. Both are things a member of the
-                        // public does, and neither can influence an outcome on its own.
-                        .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/applications").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/objections").permitAll()
-
-                        .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
-                        .requestMatchers("/api/v1/dev/**").permitAll()
-
-                        // --- restricted --------------------------------------------------------
-                        // The only route that may backdate a submission. See ADR-0005.
-                        .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/applications:import")
-                                .hasAnyRole(Role.OPERATOR.name(), Role.ADMIN.name())
-
-                        // Recording facts about applicants: certificates, duplicate judgements.
-                        .requestMatchers(HttpMethod.POST,
-                                "/api/v1/applications/*/verifications",
-                                "/api/v1/schemes/*/verifications:import",
-                                "/api/v1/schemes/*/deduplication:run",
-                                "/api/v1/duplicate-reviews/*/decision")
-                                .hasAnyRole(Role.OPERATOR.name(), Role.ADMIN.name())
-
-                        // Deciding outcomes: the quota matrix, the freeze, the draw, objections.
-                        .requestMatchers(HttpMethod.POST,
-                                "/api/v1/schemes/*/rules",
-                                "/api/v1/schemes/*/rules/*:activate",
-                                "/api/v1/schemes/*/registry:freeze",
-                                "/api/v1/schemes/*/draws",
-                                "/api/v1/draws/*/reveal",
-                                "/api/v1/draws/*/execute",
-                                "/api/v1/draws/*/publish",
-                                "/api/v1/objections/*/decision")
-                                .hasRole(Role.ADMIN.name())
-
-                        // Everything else — including an applicant's own file, which is guarded per
-                        // application number by @PreAuthorize rather than by role alone.
-                        .anyRequest().authenticated())
-
+                .authorizeHttpRequests(this::authorise)
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt ->
                         jwt.jwtAuthenticationConverter(authenticationConverter())));
 
         return http.build();
+    }
+
+    /**
+     * The access rules, in the order they are evaluated.
+     *
+     * <p>Extracted from the chain because one of them is conditional, and matchers are matched
+     * top to bottom: {@code anyRequest()} has to come last, so a conditional rule cannot simply be
+     * appended afterwards.
+     */
+    private void authorise(
+            org.springframework.security.config.annotation.web.configurers
+                    .AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry
+                    authorize) {
+
+        // --- open to everybody, on purpose -------------------------------------------------
+        // The endpoints by which this system is checked. Requiring credentials here would defeat
+        // the point of publishing anything.
+        authorize
+                .requestMatchers(HttpMethod.POST, "/api/v1/draws/*/verify").permitAll()
+                .requestMatchers(HttpMethod.GET,
+                        "/api/v1/audit/verify",
+                        "/api/v1/draws/*/results.csv",
+                        "/api/v1/registry/**",
+                        "/api/v1/schemes",
+                        "/api/v1/schemes/*",
+                        "/api/v1/schemes/*/draws",
+                        "/api/v1/draws/*").permitAll()
+
+                // Applying, and objecting to a result. Both are things a member of the public does,
+                // and neither can influence an outcome on its own.
+                .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/applications").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/objections").permitAll()
+
+                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll();
+
+        // The development token endpoint, opened only where it exists.
+        //
+        // Its controllers are already @Profile("dev"), so in production these paths 404 whatever
+        // this rule says. Scoping the rule as well means a controller added under /api/v1/dev
+        // without the profile annotation is refused rather than silently public — the kind of
+        // mistake a standing permitAll invites and nothing else would catch.
+        if (environment.matchesProfiles("dev")) {
+            authorize.requestMatchers("/api/v1/dev/**").permitAll();
+        }
+
+        // --- restricted ---------------------------------------------------------------------
+        authorize
+                // The only route that may backdate a submission. See ADR-0005.
+                .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/applications:import")
+                        .hasAnyRole(Role.OPERATOR.name(), Role.ADMIN.name())
+
+                // Recording facts about applicants: certificates, duplicate judgements.
+                .requestMatchers(HttpMethod.POST,
+                        "/api/v1/applications/*/verifications",
+                        "/api/v1/schemes/*/verifications:import",
+                        "/api/v1/schemes/*/deduplication:run",
+                        "/api/v1/duplicate-reviews/*/decision")
+                        .hasAnyRole(Role.OPERATOR.name(), Role.ADMIN.name())
+
+                // Deciding outcomes: the quota matrix, the freeze, the draw, objections.
+                .requestMatchers(HttpMethod.POST,
+                        "/api/v1/schemes/*/rules",
+                        "/api/v1/schemes/*/rules/*:activate",
+                        "/api/v1/schemes/*/registry:freeze",
+                        "/api/v1/schemes/*/draws",
+                        "/api/v1/draws/*/reveal",
+                        "/api/v1/draws/*/execute",
+                        "/api/v1/draws/*/publish",
+                        "/api/v1/objections/*/decision")
+                        .hasRole(Role.ADMIN.name())
+
+                // Everything else — including an applicant's own file, which is guarded per
+                // application number by @PreAuthorize rather than by role alone.
+                .anyRequest().authenticated();
     }
 
     /**
@@ -144,7 +176,12 @@ public class SecurityConfiguration {
      */
     @Bean
     public JwtDecoder jwtDecoder() {
-        return NimbusJwtDecoder.withSecretKey(key()).build();
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(key()).build();
+        // Signature and expiry are checked by default; the issuer is not. With one service and one
+        // secret that costs nothing today, and stops costing nothing the moment that secret is
+        // reused anywhere — at which point the other service's tokens would be honoured here.
+        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuer));
+        return decoder;
     }
 
     @Bean
