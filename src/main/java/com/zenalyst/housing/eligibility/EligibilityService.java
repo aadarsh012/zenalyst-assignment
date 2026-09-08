@@ -75,32 +75,35 @@ public class EligibilityService {
                 LocalDate.ofInstant(scheme.getApplicationsCloseAt(), ZoneOffset.UTC));
     }
 
-    /** Evaluates every application in the scheme, in application-number order. */
+    /**
+     * Evaluates every application in the scheme, in application-number order.
+     *
+     * <p>Bulk by design — the freeze needs all of them — and every query is scoped to the scheme.
+     * Three queries regardless of size, rather than one per application.
+     */
     @Transactional(readOnly = true)
     public List<Assessment> assessAll(Scheme scheme) {
         EligibilityRules rules = rulesFor(scheme);
+        List<Application> register = applications.findBySchemeIdOrderByApplicationNoAsc(scheme.getId());
+
+        Map<UUID, String> applicationNumbers = new HashMap<>();
+        register.forEach(application ->
+                applicationNumbers.put(application.getId(), application.getApplicationNo()));
 
         Map<UUID, String> supersededBy = new HashMap<>();
-        for (DuplicateLink link : duplicateLinks.findAll()) {
-            if (link.getSchemeId().equals(scheme.getId())) {
-                supersededBy.put(link.getDuplicateApplicationId(),
-                        applications.findById(link.getCanonicalApplicationId())
-                                .map(Application::getApplicationNo).orElse("another application"));
-            }
+        for (DuplicateLink link : duplicateLinks.findBySchemeId(scheme.getId())) {
+            supersededBy.put(link.getDuplicateApplicationId(),
+                    applicationNumbers.getOrDefault(
+                            link.getCanonicalApplicationId(), "another application"));
         }
 
         Map<UUID, Map<ClaimType, EligibilityEvaluator.ClaimOutcome>> claims = new HashMap<>();
         for (ClaimVerification verification : verifications.findBySchemeId(scheme.getId())) {
             claims.computeIfAbsent(verification.getApplicationId(), key -> new EnumMap<>(ClaimType.class))
-                    .put(verification.getClaim(),
-                            verification.getOutcome() == ClaimVerification.Outcome.VERIFIED
-                                    ? EligibilityEvaluator.ClaimOutcome.VERIFIED
-                                    : EligibilityEvaluator.ClaimOutcome.REJECTED);
+                    .put(verification.getClaim(), outcomeOf(verification));
         }
 
-        return applications.findAll().stream()
-                .filter(application -> application.getSchemeId().equals(scheme.getId()))
-                .sorted((a, b) -> a.getApplicationNo().compareTo(b.getApplicationNo()))
+        return register.stream()
                 .map(application -> {
                     EligibilityEvaluator.Candidate candidate = toCandidate(
                             application, supersededBy.get(application.getId()),
@@ -111,6 +114,14 @@ public class EligibilityService {
                 .toList();
     }
 
+    /**
+     * Evaluates one application.
+     *
+     * <p>Three targeted queries, not the whole scheme. This previously ran {@link #assessAll} and
+     * discarded everything but one row — which meant that explaining a single applicant cost
+     * proportional to the entire register, and, because the query was unscoped, proportional to
+     * every other scheme's register as well.
+     */
     @Transactional(readOnly = true)
     public Assessment assess(String applicationNo) {
         Application application = applications.findByApplicationNo(applicationNo)
@@ -118,10 +129,24 @@ public class EligibilityService {
         Scheme scheme = schemes.findById(application.getSchemeId())
                 .orElseThrow(() -> ApiException.notFound("scheme", application.getSchemeId().toString()));
 
-        return assessAll(scheme).stream()
-                .filter(assessment -> assessment.application().getApplicationNo().equals(applicationNo))
-                .findFirst()
-                .orElseThrow(() -> ApiException.notFound("application", applicationNo));
+        String supersededBy = duplicateLinks.findByDuplicateApplicationId(application.getId())
+                .map(link -> applications.findById(link.getCanonicalApplicationId())
+                        .map(Application::getApplicationNo).orElse("another application"))
+                .orElse(null);
+
+        Map<ClaimType, EligibilityEvaluator.ClaimOutcome> claims = new EnumMap<>(ClaimType.class);
+        verifications.findByApplicationId(application.getId())
+                .forEach(verification -> claims.put(verification.getClaim(), outcomeOf(verification)));
+
+        EligibilityEvaluator.Candidate candidate = toCandidate(application, supersededBy, claims);
+        return new Assessment(application, candidate,
+                EligibilityEvaluator.evaluate(candidate, rulesFor(scheme)));
+    }
+
+    private static EligibilityEvaluator.ClaimOutcome outcomeOf(ClaimVerification verification) {
+        return verification.getOutcome() == ClaimVerification.Outcome.VERIFIED
+                ? EligibilityEvaluator.ClaimOutcome.VERIFIED
+                : EligibilityEvaluator.ClaimOutcome.REJECTED;
     }
 
     @Transactional

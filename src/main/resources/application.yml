@@ -122,7 +122,10 @@ management:
         include: health,info,metrics
   endpoint:
     health:
-      show-details: always
+      # /actuator/health is anonymous, and the details name the database, the job server and the
+      # disk. None of that helps a caller checking whether the service is up, and all of it helps
+      # somebody deciding what to attack.
+      show-details: when-authorized
   info:
     env:
       enabled: true

@@ -1,6 +1,7 @@
 package com.zenalyst.housing.transparency;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -200,11 +201,20 @@ class TransparencyIT extends AbstractIntegrationTest {
     @DisplayName("altering a frozen candidate breaks the registry root")
     void verificationCatchesATamperedRegister() {
         runDraw();
-        jdbc.update("""
-                UPDATE frozen_candidate SET canonical_json = replace(canonical_json, '"eligible":true', '"eligible":false')
-                WHERE registry_id = (SELECT registry_id FROM draw WHERE id = ?::uuid)
-                  AND leaf_index = 0
-                """, drawId);
+
+        // The frozen register refuses edits, so a tamperer would have to drop the trigger first.
+        // Doing exactly that is the point: even with the database defence removed, the arithmetic
+        // still catches it.
+        jdbc.execute("ALTER TABLE frozen_candidate DISABLE TRIGGER frozen_candidate_no_mutation");
+        try {
+            jdbc.update("""
+                    UPDATE frozen_candidate SET canonical_json = replace(canonical_json, '"eligible":true', '"eligible":false')
+                    WHERE registry_id = (SELECT registry_id FROM draw WHERE id = ?::uuid)
+                      AND leaf_index = 0
+                    """, drawId);
+        } finally {
+            jdbc.execute("ALTER TABLE frozen_candidate ENABLE TRIGGER frozen_candidate_no_mutation");
+        }
 
         JsonNode report = post("/api/v1/draws/" + drawId + "/verify");
 
@@ -212,6 +222,24 @@ class TransparencyIT extends AbstractIntegrationTest {
         assertThat(checkNamed(report, "REGISTRY_ROOT").path("passed").asBoolean()).isFalse();
         assertThat(checkNamed(report, "REGISTRY_ROOT").path("detail").asText())
                 .contains("no longer produce the published root");
+    }
+
+    @Test
+    @DisplayName("the frozen register refuses to be edited at all")
+    void frozenRegisterIsImmutable() {
+        runDraw();
+
+        // Every other published artefact refuses UPDATE and DELETE. This one did not until V9,
+        // which was an oversight rather than a decision: a tampered row was caught by /verify, but
+        // a plain UPDATE was enough to make it.
+        assertThatThrownBy(() -> jdbc.update(
+                "UPDATE frozen_candidate SET application_no = 'X' WHERE leaf_index = 0"))
+                .hasMessageContaining("frozen register is a snapshot");
+
+        assertThatThrownBy(() -> jdbc.update(
+                "DELETE FROM frozen_registry WHERE registry_root = "
+                        + "(SELECT registry_root FROM draw WHERE id = ?::uuid)", drawId))
+                .hasMessageContaining("frozen register is a snapshot");
     }
 
     // --- the auditor's answer ----------------------------------------------
