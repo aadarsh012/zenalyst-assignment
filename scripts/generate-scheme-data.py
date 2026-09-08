@@ -20,7 +20,7 @@ Deterministic: --seed and --as-of together fix the population completely, so
 two runs on different days produce byte-identical files and a demo can be
 re-run and compared. Nothing here reads the wall clock.
 
-    python3 scripts/generate-scheme-data.py --scheme MHS-2026 --count 4000
+    python3 scripts/generate-scheme-data.py --scheme DEMO-2026 --count 4000
 """
 
 import argparse
@@ -88,7 +88,7 @@ def misspell(name: str, rng: random.Random) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scheme", default="MHS-2026")
+    parser.add_argument("--scheme", default="DEMO-2026")
     parser.add_argument("--count", type=int, default=4000, help="distinct people")
     parser.add_argument("--seed", type=int, default=20260908)
     parser.add_argument("--as-of", default=DEFAULT_AS_OF.isoformat(),
