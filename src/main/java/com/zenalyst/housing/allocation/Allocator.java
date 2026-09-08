@@ -196,9 +196,10 @@ public final class Allocator {
                 .filter(applicationNo -> !selected.containsKey(applicationNo))
                 .toList();
 
-        List<String> waitlist = competitors.stream()
+        List<PoolOutcome.WaitlistEntry> waitlist = competitors.stream()
                 .filter(ranked -> !selected.containsKey(ranked.applicationNo()))
-                .map(RankedCandidate::applicationNo)
+                .map(ranked -> new PoolOutcome.WaitlistEntry(
+                        ranked.applicationNo(), poolRanks.get(ranked.applicationNo())))
                 .toList();
 
         return new PoolFill(awards, new PoolOutcome(

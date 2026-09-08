@@ -77,8 +77,12 @@ channels and records every acceptance in a tamper-evident log.
   takes the choice of seed away from the authority entirely.
 - **Published results are immutable**, enforced by database trigger.
 
-Not yet built: the transparency endpoints — per-applicant explanations and independent verification
-of a published draw.
+- **The transparency layer.** One endpoint for each of the three challengers the brief names: an
+  applicant's `/explain`, a court's `/verify`, an auditor's `/audit/verify`, and a newspaper's
+  `results.csv` ([ADR-0013](adr/0013-explain-is-assembled-not-reconstructed.md)).
+
+Not yet built: objections and re-draw, and the hardening layer — authentication, observability and
+the seed-data generator.
 
 ---
 
@@ -152,6 +156,10 @@ that has no tables in it. Run `colima stop` before switching.
 | `POST` | `/api/v1/draws/{id}/execute` | Queue the draw (`202`); poll for `COMPLETED` |
 | `POST` | `/api/v1/draws/{id}/publish` | Declare the result final and immutable |
 | `GET` | `/api/v1/draws/{id}` | Draw status and everything published about it |
+| `GET` | `/api/v1/applications/{applicationNo}/explain` | Why this applicant got a flat, or did not |
+| `POST` | `/api/v1/draws/{id}/verify` | Re-derive the draw from its published inputs |
+| `GET` | `/api/v1/audit/verify` | Rehash the audit chain and name the first break |
+| `GET` | `/api/v1/draws/{id}/results.csv` | The published allotment, with its inputs in the header |
 | `GET` | `/actuator/health` | Liveness, including database connectivity |
 
 ### Submitting online
@@ -350,6 +358,61 @@ where the outcome genuinely matters should use the beacon — see
 [ADR-0011](adr/0011-commit-reveal-and-why-a-beacon-is-stronger.md), which states the gap rather than
 glossing it.
 
+### Answering the three challengers
+
+The brief says the final list will be questioned by an applicant, by a newspaper, and quite possibly
+in court. There is one endpoint for each.
+
+**The applicant — `/explain`.** Not a status, an account:
+
+```
+outcome: WAITLISTED
+You have not been allotted a flat. You are number 48 on the waiting list for the OPEN pool,
+where you were ranked 60. If the 47 ahead of you give up a flat, yours is the next offer.
+
+pools competed in:
+  OPEN   you ranked  60 of 60   seats 12   merit cutoff at rank 12
+
+check it yourself:
+  - Your place in the draw is HMAC-SHA256(key = the published seed, message = "DEMO-000021")
+    = fd9134fe… Compute it yourself; it depends on nothing but those two values.
+  - Your row was among the inputs: hash the canonicalJson above and fold it up through the
+    inclusionProof to reach the registry root 3fc6b93d…
+  - The seed was committed to before it was known: SHA-256(seed + ":" + salt) equals the
+    commitment 72beebe9…, published when the draw was created.
+```
+
+Every fact there is read from storage, never recomputed — so two people asking the same question
+cannot get two answers.
+
+**The court — `/verify`.** Re-derives the whole draw: rebuilds the register's Merkle root, checks the
+seed against its commitment, re-runs the allocator, and compares the allotment name by name. Swap a
+winner for a waitlisted applicant in the database and it says so:
+
+```
+verified: false
+  PASS  REGISTRY_ROOT     PASS  SEED_COMMITMENT     PASS  RULES_HASH
+  FAIL  ALLOTMENT         PASS  RESULT_HASH
+
+ALLOTMENT: DEMO-000027 should hold a flat (OPEN/MERIT/1) but has no allotment;
+           DEMO-000055 holds a flat that the published inputs do not award
+```
+
+**The auditor — `/audit/verify`.** Rehashes every event from its *contents*, not by comparing stored
+hashes to each other — the latter catches a deleted event but not an edited one:
+
+```
+verified=false  firstBreakAtSeq=64  kind=CONTENT_ALTERED
+Event 64 stores hash 1d4ab23bbb063796… but its contents hash to 80edd2025ff2d6af….
+The event has been edited since it was written.
+```
+
+Restore the original bytes and the chain verifies again — nothing about it is stateful beyond the
+bytes themselves.
+
+**The newspaper — `results.csv`.** Every hash needed to check the file is in its header; the rows
+carry an application number, a pool, a basis and a rank, and no personal data at all.
+
 ### Verifying a frozen register yourself
 
 The offer this system makes is that you do not have to trust it. `scripts/verify-registry.py` is
@@ -499,6 +562,7 @@ com.zenalyst.housing
 ├── rules/           versioned, hashed quota matrices
 ├── allocation/      ★ PURE: the allocator, pools, tickets, waitlists
 ├── draw/            the ceremony: commit, reveal, execute, publish
+├── transparency/    explain, verify, audit check, public export
 ├── audit/           the hash chain
 └── platform/        errors, hashing, idempotency, clock
 ```
@@ -524,7 +588,7 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
-251 tests: 165 unit and architecture tests that need no Docker, and 86 integration tests against a
+263 tests: 165 unit and architecture tests that need no Docker, and 98 integration tests against a
 real PostgreSQL.
 
 | Suite | Count | Covers |
@@ -546,6 +610,7 @@ real PostgreSQL.
 | `DryRunIT` | 15 | matrix validation, activation, rehearsal, frozen-snapshot isolation |
 | `DrawCeremonyIT` | 13 | commit/reveal/execute/publish, exactly-once, immutability, audit order |
 | `SeedSourceTest` | 7 | commitment verifiability, salt, beacon refusing a future round |
+| `TransparencyIT` | 12 | explain, tamper detection in allotments, register and audit chain, CSV |
 | `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |

@@ -38,9 +38,19 @@ public abstract class AbstractIntegrationTest {
     protected TestRestTemplate rest;
 
     @DynamicPropertySource
-    static void datasourceProperties(DynamicPropertyRegistry registry) {
+    static void testProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+
+        // JobRunr's dashboard binds a fixed port, so a running application — or a second test JVM —
+        // makes every context here fail to start. Tests have no use for it.
+        registry.add("jobrunr.dashboard.enabled", () -> false);
+
+        // Jobs are enqueued but not executed in the background. Tests that care about the enqueue
+        // path assert on the 202 and the status transition; tests that care about the result drive
+        // DrawExecutionService directly. Leaving the poller running would add five seconds of
+        // waiting per draw and a race between it and the test.
+        registry.add("jobrunr.background-job-server.enabled", () -> false);
     }
 }

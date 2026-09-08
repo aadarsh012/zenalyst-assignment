@@ -22,3 +22,4 @@ evidence about how the system came to be shaped this way.
 | [0010](0010-open-seats-first-and-horizontal-carve-outs.md) | Fill open seats first; carve horizontal reservations out of each pool | 4 |
 | [0011](0011-commit-reveal-and-why-a-beacon-is-stronger.md) | Commit to the seed before revealing it — and why a beacon is stronger | 5 |
 | [0012](0012-the-draw-runs-as-a-job-with-retries-off.md) | The draw runs as a background job, with automatic retries off | 5 |
+| [0013](0013-explain-is-assembled-not-reconstructed.md) | The explanation is assembled from stored facts, never reconstructed | 6 |

@@ -23,11 +23,15 @@ public record PoolOutcome(
         int cutoffPoolRank,
         List<HorizontalOutcome> horizontal,
         List<String> displaced,
-        List<String> waitlist) {
+        List<WaitlistEntry> waitlist) {
 
     public PoolOutcome {
         horizontal = List.copyOf(horizontal);
         displaced = List.copyOf(displaced);
         waitlist = List.copyOf(waitlist);
+    }
+
+    /** One competitor who was not selected, with where they actually came in this pool. */
+    public record WaitlistEntry(String applicationNo, int poolRank) {
     }
 }

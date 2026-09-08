@@ -91,19 +91,20 @@ public class DrawResultRepository {
     }
 
     private void writeWaitlists(UUID drawId, List<PoolOutcome> pools) {
-        record Entry(String pool, int position, String applicationNo) {
+        record Entry(String pool, int position, String applicationNo, int poolRank) {
         }
         List<Entry> entries = new java.util.ArrayList<>();
         for (PoolOutcome pool : pools) {
-            List<String> waitlist = pool.waitlist();
+            List<PoolOutcome.WaitlistEntry> waitlist = pool.waitlist();
             for (int i = 0; i < waitlist.size(); i++) {
-                entries.add(new Entry(pool.pool().name(), i + 1, waitlist.get(i)));
+                entries.add(new Entry(pool.pool().name(), i + 1,
+                        waitlist.get(i).applicationNo(), waitlist.get(i).poolRank()));
             }
         }
 
         jdbc.batchUpdate("""
-                INSERT INTO draw_waitlist (draw_id, pool, position, application_no)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO draw_waitlist (draw_id, pool, position, application_no, pool_rank)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 new BatchPreparedStatementSetter() {
                     @Override
@@ -113,6 +114,7 @@ public class DrawResultRepository {
                         ps.setString(2, entry.pool());
                         ps.setInt(3, entry.position());
                         ps.setString(4, entry.applicationNo());
+                        ps.setInt(5, entry.poolRank());
                     }
 
                     @Override
