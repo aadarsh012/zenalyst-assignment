@@ -60,7 +60,17 @@ channels and records every acceptance in a tamper-evident log.
   terms, published *before* any seed exists, with per-applicant inclusion proofs
   ([ADR-0009](adr/0009-freeze-before-the-draw.md)).
 
-Not yet built: the rules engine, the allocator, the draw itself, and the transparency endpoints.
+- **Versioned quota matrices.** The seat inventory and reservation shares are a published,
+  hashed instrument rather than configuration; at most one version is active per scheme, enforced
+  by a partial unique index.
+- **The allocator.** Vertical pools with the migration rule, horizontal reservations carved out
+  within each pool, per-pool waitlists, and full provenance on every seat
+  ([ADR-0010](adr/0010-open-seats-first-and-horizontal-carve-outs.md)). Pure — no Spring, no
+  database, no clock, no randomness but the seed, enforced by ArchUnit.
+- **Dry runs.** Rehearse a draw against a frozen register and an active matrix, and keep none of it.
+
+Not yet built: the draw ceremony itself (seed commitment and reveal, persistence), and the
+transparency endpoints.
 
 ---
 
@@ -125,6 +135,10 @@ that has no tables in it. Run `colima stop` before switching.
 | `POST` | `/api/v1/schemes/{code}/registry:freeze` | Freeze the register and publish its root |
 | `GET` | `/api/v1/registry/{root}/candidates` | The published rows behind a root |
 | `GET` | `/api/v1/registry/{root}/proof/{applicationNo}` | One applicant's inclusion proof |
+| `POST` | `/api/v1/schemes/{code}/rules` | Publish a draft quota matrix |
+| `POST` | `/api/v1/schemes/{code}/rules/{version}:activate` | Put a matrix in force |
+| `GET` | `/api/v1/schemes/{code}/rules` | Every version, superseded ones included |
+| `POST` | `/api/v1/schemes/{code}/draws:dry-run` | Rehearse a draw; persists nothing |
 | `GET` | `/actuator/health` | Liveness, including database connectivity |
 
 ### Submitting online
@@ -234,6 +248,50 @@ the list after seeing the seed could choose the outcome.
 
 Freeze twice with nothing changed and the root is identical. Change one applicant's effective
 category and it changes.
+
+### The quota matrix and the allocator
+
+```bash
+curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/rules?createdBy=registrar-1' \
+  -H 'Content-Type: application/json' -d '{
+   "version":"v1",
+   "seats":{"OPEN":300,"SC":90,"ST":42,"OBC":162,"EWS":6},
+   "horizontalReservations":[
+     {"category":"WOMEN","share":0.30},
+     {"category":"PWD","share":0.05},
+     {"category":"EX_SERVICE","share":0.03},
+     {"category":"LOCAL_RESIDENT","share":0.20}]}'
+
+curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/rules/v1:activate?activatedBy=registrar-1'
+curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/draws:dry-run?seed=rehearsal-2026'
+```
+
+A matrix is validated when it is written, not when it is used — a total of 599 seats for 600 flats
+is refused at creation rather than discovered mid-draw with the seed already public.
+
+**The open pool is filled first, from everybody.** A reserved-category candidate who ranks high
+enough takes an *open* seat, and their category's reserved seats stay available to others. Filling
+the reserved pools first would turn a reservation into a ceiling.
+
+**Horizontal reservations are carved out of each pool, not added to it.** Thirty per cent of a
+hundred seats means thirty of those hundred. Where too few qualifying candidates reach the merit
+cutoff, the shortfall displaces the lowest-ranked selectees — and **the displaced are named in the
+result**, because they have the strongest reason of anyone to ask what happened:
+
+```
+EWS: 6 seats, 110 competitors, merit cutoff at rank 4
+  WOMEN  required=2  onMerit=0  toppedUp=2
+
+  ranks 1-4  MERIT
+  ranks 5-6  displaced: MHS-2026-000800, MHS-2026-000170
+  ranks 7-8  HORIZONTAL_TOP_UP via WOMEN
+```
+
+Ordering is `HMAC-SHA256(seed, applicationNo)`, deliberately not a seeded shuffle — a shuffle
+depends on input order and on the JDK's `Random`, so a journalist reimplementing it in Python would
+get different names and reasonably conclude we had cheated.
+
+Reservations that cannot be filled are **reported as unfilled**, not quietly ignored.
 
 ### Verifying a frozen register yourself
 
@@ -372,6 +430,9 @@ com.zenalyst.housing
 ├── identity/        fingerprinting, the merge graph, the review queue
 ├── eligibility/     the rules, claim verification, reason codes
 ├── registry/        the freeze, the Merkle tree, inclusion proofs
+├── rules/           versioned, hashed quota matrices
+├── allocation/      ★ PURE: the allocator, pools, tickets, waitlists
+├── draw/            running the draw (dry runs for now)
 ├── audit/           the hash chain
 └── platform/        errors, hashing, idempotency, clock
 ```
@@ -397,7 +458,7 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
-189 tests: 132 unit and architecture tests that need no Docker, and 57 integration tests against a
+230 tests: 158 unit and architecture tests that need no Docker, and 72 integration tests against a
 real PostgreSQL.
 
 | Suite | Count | Covers |
@@ -414,7 +475,9 @@ real PostgreSQL.
 | `MerkleTreeTest` | 26 | proofs at every size, tamper resistance, CVE-2012-2459, domain separation |
 | `EligibilityEvaluatorTest` | 16 | disqualifying vs claim rules, the reference date, EWS |
 | `DeduplicationIT` | 12 | all four tiers, review decisions, re-run idempotency |
+| `AllocatorTest` | 26 | migration rule, displacement, determinism, invariants, a 4,000→600 draw |
 | `RegistryFreezeIT` | 15 | reason codes, verification, root determinism, inclusion proofs |
+| `DryRunIT` | 15 | matrix validation, activation, rehearsal, frozen-snapshot isolation |
 | `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |
@@ -427,16 +490,14 @@ ordering depend on where it runs.
 ### A note on the architecture tests
 
 `ArchitectureTest` forbids the `com.zenalyst.housing.allocation` package from referencing Spring,
-JPA, the system clock, or any source of randomness. **That package does not exist yet**, so those
-four rules currently pass vacuously; they are guardrails placed ahead of the code they guard.
+JPA, the system clock, or any source of randomness. Those rules were written in phase 0, before the
+package existed, and they now guard real code.
 
-They are there because the defensibility of the finished system will rest on the allocator being
-a pure function of *(frozen registry, rule version, seed)* — the same inputs producing the same
-output on any machine, forever. A single stray `Instant.now()` would quietly falsify that while
-every other test kept passing. Writing the rule before the code means it can never be added
-later, once violations already exist and it is inconvenient.
-
-The fifth rule — no cyclic dependencies between packages — is live today.
+They matter because the defensibility of the system rests on the allocator being a pure function of
+*(frozen registry, rule version, seed)* — the same inputs producing the same output on any machine,
+forever. A single stray `Instant.now()` would quietly falsify that while every other test kept
+passing. Adding one temporarily fails the build with exactly that explanation, which is the point:
+the rule was written before there were violations to make it inconvenient.
 
 ---
 
