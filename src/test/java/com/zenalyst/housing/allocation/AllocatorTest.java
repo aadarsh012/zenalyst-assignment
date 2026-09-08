@@ -414,7 +414,14 @@ class AllocatorTest {
             AllocationResult result = Allocator.allocate(candidates, rules(seats(5, 0, 0, 0, 0)), SEED);
 
             assertThat(poolOf(result, SeatPool.OPEN).waitlist())
+                    .extracting(PoolOutcome.WaitlistEntry::applicationNo)
                     .containsExactlyElementsOf(order.subList(5, 20));
+
+            // Each entry carries where it actually came, not merely its place in the queue. With
+            // no reservation in play here the two happen to differ by exactly the five seats.
+            assertThat(poolOf(result, SeatPool.OPEN).waitlist())
+                    .extracting(PoolOutcome.WaitlistEntry::poolRank)
+                    .containsExactly(6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
         }
     }
 

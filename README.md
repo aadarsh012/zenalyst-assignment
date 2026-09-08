@@ -77,8 +77,16 @@ channels and records every acceptance in a tamper-evident log.
   takes the choice of seed away from the authority entirely.
 - **Published results are immutable**, enforced by database trigger.
 
-Not yet built: the transparency endpoints — per-applicant explanations and independent verification
-of a published draw.
+- **The transparency layer.** One endpoint for each of the three challengers the brief names: an
+  applicant's `/explain`, a court's `/verify`, an auditor's `/audit/verify`, and a newspaper's
+  `results.csv` ([ADR-0013](adr/0013-explain-is-assembled-not-reconstructed.md)).
+
+- **Objections and re-draw.** A wrong result is superseded by a new draw, never edited. The
+  original keeps its seed, its root and its allotment, and stays verifiable forever
+  ([ADR-0014](adr/0014-corrections-supersede-they-never-edit.md)).
+
+Not yet built: the hardening layer — authentication, observability, OpenAPI and the seed-data
+generator.
 
 ---
 
@@ -152,6 +160,13 @@ that has no tables in it. Run `colima stop` before switching.
 | `POST` | `/api/v1/draws/{id}/execute` | Queue the draw (`202`); poll for `COMPLETED` |
 | `POST` | `/api/v1/draws/{id}/publish` | Declare the result final and immutable |
 | `GET` | `/api/v1/draws/{id}` | Draw status and everything published about it |
+| `GET` | `/api/v1/applications/{applicationNo}/explain` | Why this applicant got a flat, or did not |
+| `POST` | `/api/v1/draws/{id}/verify` | Re-derive the draw from its published inputs |
+| `GET` | `/api/v1/audit/verify` | Rehash the audit chain and name the first break |
+| `GET` | `/api/v1/draws/{id}/results.csv` | The published allotment, with its inputs in the header |
+| `POST` | `/api/v1/schemes/{code}/objections` | File a challenge to a published result |
+| `POST` | `/api/v1/objections/{id}/decision` | Adjudicate, with a written reason |
+| `GET` | `/api/v1/schemes/{code}/objections` | Every objection, decided ones included |
 | `GET` | `/actuator/health` | Liveness, including database connectivity |
 
 ### Submitting online
@@ -350,6 +365,105 @@ where the outcome genuinely matters should use the beacon — see
 [ADR-0011](adr/0011-commit-reveal-and-why-a-beacon-is-stronger.md), which states the gap rather than
 glossing it.
 
+### Answering the three challengers
+
+The brief says the final list will be questioned by an applicant, by a newspaper, and quite possibly
+in court. There is one endpoint for each.
+
+**The applicant — `/explain`.** Not a status, an account:
+
+```
+outcome: WAITLISTED
+You have not been allotted a flat. You are number 48 on the waiting list for the OPEN pool,
+where you were ranked 60. If the 47 ahead of you give up a flat, yours is the next offer.
+
+pools competed in:
+  OPEN   you ranked  60 of 60   seats 12   merit cutoff at rank 12
+
+check it yourself:
+  - Your place in the draw is HMAC-SHA256(key = the published seed, message = "DEMO-000021")
+    = fd9134fe… Compute it yourself; it depends on nothing but those two values.
+  - Your row was among the inputs: hash the canonicalJson above and fold it up through the
+    inclusionProof to reach the registry root 3fc6b93d…
+  - The seed was committed to before it was known: SHA-256(seed + ":" + salt) equals the
+    commitment 72beebe9…, published when the draw was created.
+```
+
+Every fact there is read from storage, never recomputed — so two people asking the same question
+cannot get two answers.
+
+**The court — `/verify`.** Re-derives the whole draw: rebuilds the register's Merkle root, checks the
+seed against its commitment, re-runs the allocator, and compares the allotment name by name. Swap a
+winner for a waitlisted applicant in the database and it says so:
+
+```
+verified: false
+  PASS  REGISTRY_ROOT     PASS  SEED_COMMITMENT     PASS  RULES_HASH
+  FAIL  ALLOTMENT         PASS  RESULT_HASH
+
+ALLOTMENT: DEMO-000027 should hold a flat (OPEN/MERIT/1) but has no allotment;
+           DEMO-000055 holds a flat that the published inputs do not award
+```
+
+**The auditor — `/audit/verify`.** Rehashes every event from its *contents*, not by comparing stored
+hashes to each other — the latter catches a deleted event but not an edited one:
+
+```
+verified=false  firstBreakAtSeq=64  kind=CONTENT_ALTERED
+Event 64 stores hash 1d4ab23bbb063796… but its contents hash to 80edd2025ff2d6af….
+The event has been edited since it was written.
+```
+
+Restore the original bytes and the chain verifies again — nothing about it is stateful beyond the
+bytes themselves.
+
+**The newspaper — `results.csv`.** Every hash needed to check the file is in its header; the rows
+carry an application number, a pool, a basis and a rank, and no personal data at all.
+
+### Getting it wrong, and putting it right
+
+A published result will sometimes be wrong — not because the lottery misbehaved, but because an
+input was. A certificate refused in error; a duplicate link joining two different people; an
+application that never reached the register.
+
+**The remedy is a new draw, never an edit.** A published allotment that can be quietly amended is
+one that proves nothing, and every root and commitment published up to that point would be worth
+exactly as much as our word that we had not amended anything.
+
+```bash
+# a re-draw nobody asked for is refused
+curl -s -X POST "localhost:8080/api/v1/schemes/OBJ/draws?committedBy=r1&supersedes=$D1"
+# 409  no objection against it has been upheld
+
+# the applicant objects
+curl -s -X POST 'localhost:8080/api/v1/schemes/OBJ/objections?filedBy=applicant' \
+  -H 'Content-Type: application/json' -d '{"applicationNo":"OBJ-000001",
+   "ground":"CATEGORY_CLAIM_WRONGLY_REFUSED",
+   "statement":"My certificate was handed in at counter 3 on 3 March and never recorded."}'
+
+# upheld, with a stated remedy; then the correction, the re-freeze and the re-draw
+# are three further deliberate acts, each with its own audit event
+```
+
+Live, from a scheme where the SC applicant's certificate was never verified before the freeze:
+
+```
+draw 1  status=PUBLISHED  seats=3  SC awarded: 0   supersededBy=d607351d…
+draw 2  status=PUBLISHED  seats=4  SC awarded: 1   supersedes  =ecf04cbe…
+
+both verify:  PASS  draw ecf04cbe…    PASS  draw d607351d…
+the objector: ALLOTTED — ranked 1 in the SC pool
+```
+
+The original is untouched, still published and still re-derives from its own inputs. Supersession
+is recorded on the successor only — which is forced rather than chosen, since a published draw
+cannot be updated at all.
+
+**Superseding requires an upheld objection.** An authority able to re-draw at will can draw
+repeatedly until it likes the answer, and the commitment ceremony would not catch it: every
+individual draw would verify perfectly. An authority that finds its own error files its own
+objection and upholds it — that is the paper trail working, not a loophole.
+
 ### Verifying a frozen register yourself
 
 The offer this system makes is that you do not have to trust it. `scripts/verify-registry.py` is
@@ -499,6 +613,8 @@ com.zenalyst.housing
 ├── rules/           versioned, hashed quota matrices
 ├── allocation/      ★ PURE: the allocator, pools, tickets, waitlists
 ├── draw/            the ceremony: commit, reveal, execute, publish
+├── transparency/    explain, verify, audit check, public export
+├── objection/       challenges, adjudication, superseding draws
 ├── audit/           the hash chain
 └── platform/        errors, hashing, idempotency, clock
 ```
@@ -524,7 +640,7 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
-251 tests: 165 unit and architecture tests that need no Docker, and 86 integration tests against a
+276 tests: 165 unit and architecture tests that need no Docker, and 111 integration tests against a
 real PostgreSQL.
 
 | Suite | Count | Covers |
@@ -546,6 +662,8 @@ real PostgreSQL.
 | `DryRunIT` | 15 | matrix validation, activation, rehearsal, frozen-snapshot isolation |
 | `DrawCeremonyIT` | 13 | commit/reveal/execute/publish, exactly-once, immutability, audit order |
 | `SeedSourceTest` | 7 | commitment verifiability, salt, beacon refusing a future round |
+| `TransparencyIT` | 12 | explain, tamper detection in allotments, register and audit chain, CSV |
+| `ObjectionAndRedrawIT` | 13 | filing, adjudication, supersession rules, both draws still verifying |
 | `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |

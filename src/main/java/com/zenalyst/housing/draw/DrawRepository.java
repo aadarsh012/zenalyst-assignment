@@ -23,6 +23,9 @@ public interface DrawRepository extends JpaRepository<Draw, UUID> {
      * twice. With it, the second waits, then reads {@code RUNNING} and declines. No advisory lock,
      * no application-level mutex — the row being changed is the thing to lock.
      */
+    /** The draw that replaced this one, if any. Supersession is recorded on the successor. */
+    Optional<Draw> findBySupersedesDrawId(UUID supersededDrawId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT d FROM Draw d WHERE d.id = :id")
     Optional<Draw> findByIdForUpdate(@Param("id") UUID id);

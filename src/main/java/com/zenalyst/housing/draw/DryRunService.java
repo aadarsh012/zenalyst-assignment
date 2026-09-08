@@ -103,6 +103,9 @@ public class DryRunService {
                 outcome.pool(), outcome.seats(), outcome.awarded(), outcome.competitors(),
                 outcome.cutoffPoolRank(), outcome.horizontal(), outcome.displaced(),
                 outcome.waitlist().size(),
-                outcome.waitlist().stream().limit(WAITLIST_PREVIEW).toList());
+                outcome.waitlist().stream()
+                        .limit(WAITLIST_PREVIEW)
+                        .map(com.zenalyst.housing.allocation.PoolOutcome.WaitlistEntry::applicationNo)
+                        .toList());
     }
 }

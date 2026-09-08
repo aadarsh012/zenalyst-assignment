@@ -33,13 +33,19 @@ public class DrawController {
      *
      * <p>Fixes the frozen register, the active quota matrix and the seed commitment together. The
      * seed itself is not in the response — that is the point of committing to it.
+     *
+     * @param supersedes an existing published draw this one replaces. Permitted only where an
+     *                   objection against that draw has been upheld: a result is replaced because
+     *                   a challenge was accepted, never because somebody preferred a different one.
+     *                   The superseded draw is not modified, and stays published and verifiable.
      */
     @PostMapping(path = "/api/v1/schemes/{code}/draws",
             produces = MediaType.APPLICATION_JSON_VALUE)
     public DrawResponse commit(
             @PathVariable String code,
-            @RequestParam("committedBy") @NotBlank String committedBy) {
-        return draws.commit(code, committedBy);
+            @RequestParam("committedBy") @NotBlank String committedBy,
+            @RequestParam(value = "supersedes", required = false) UUID supersedes) {
+        return draws.commit(code, committedBy, supersedes);
     }
 
     /** Publishes the seed. Anyone can now check it against the commitment. */

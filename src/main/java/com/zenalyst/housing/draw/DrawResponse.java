@@ -33,9 +33,15 @@ public record DrawResponse(
         Instant publishedAt,
         String publishedBy,
         String failureReason,
+        String supersedesDrawId,
+        String supersededByDrawId,
         String verification) {
 
     static DrawResponse of(Draw draw, String schemeCode, String rulesVersion) {
+        return of(draw, schemeCode, rulesVersion, null);
+    }
+
+    static DrawResponse of(Draw draw, String schemeCode, String rulesVersion, String supersededBy) {
         boolean seedIsPublic = draw.getStatus() != DrawStatus.COMMITTED;
 
         return new DrawResponse(
@@ -48,6 +54,8 @@ public record DrawResponse(
                 draw.getCommittedAt(), draw.getCommittedBy(), draw.getRevealedAt(),
                 draw.getExecutedAt(), draw.getPublishedAt(), draw.getPublishedBy(),
                 draw.getFailureReason(),
+                draw.getSupersedesDrawId() == null ? null : draw.getSupersedesDrawId().toString(),
+                supersededBy,
                 verificationInstructions(draw, seedIsPublic));
     }
 
