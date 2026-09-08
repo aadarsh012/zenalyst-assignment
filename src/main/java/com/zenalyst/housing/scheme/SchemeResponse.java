@@ -16,7 +16,7 @@ public record SchemeResponse(
         Instant applicationsCloseAt,
         String status) {
 
-    static SchemeResponse from(Scheme scheme) {
+    public static SchemeResponse from(Scheme scheme) {
         return new SchemeResponse(
                 scheme.getId(),
                 scheme.getCode(),

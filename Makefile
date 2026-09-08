@@ -94,6 +94,15 @@ psql: ## Open a psql shell on the local database
 schema: ## Print the current database schema
 	@$(PSQL) -c '\d+ scheme' -c '\d+ audit_event' -c 'SELECT version, description, success FROM flyway_schema_history ORDER BY installed_rank;'
 
+.PHONY: demo
+demo: up ## Run a whole scheme end to end: 4,000 applicants, 600 flats, then verify it
+	@echo "Start the application first (make run), then this drives it through the public API."
+	python3 scripts/demo.py
+
+.PHONY: demo-small
+demo-small: up ## The same, with 400 applicants — quicker
+	python3 scripts/demo.py --count 400 --flats 60 --scheme DEMO-SMALL
+
 .PHONY: clean
 clean: ## Remove build output
 	$(MVN) clean

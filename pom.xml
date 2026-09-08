@@ -21,6 +21,7 @@
         <java.version>17</java.version>
         <commons-csv.version>1.14.1</commons-csv.version>
         <jobrunr.version>8.8.2</jobrunr.version>
+        <springdoc.version>2.8.17</springdoc.version>
         <flyway.url>jdbc:postgresql://localhost:5432/housing</flyway.url>
         <flyway.user>housing</flyway.user>
         <flyway.password>housing</flyway.password>
@@ -58,6 +59,36 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- JWT-based authentication. The resource-server starter brings Nimbus, which both
+             verifies and mints tokens, so no separate JWT library is needed. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
+        <!-- Trace context on every request and in every log line. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+
+        <!-- An API nobody can read is an API nobody can integrate with. -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${springdoc.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <!-- Long-running jobs: the draw executes as a persisted, retryable background job rather

@@ -2,6 +2,12 @@ spring:
   application:
     name: housing-allocation
 
+  profiles:
+    # `dev` is the local default and enables the stand-in token endpoint. Production sets
+    # SPRING_PROFILES_ACTIVE=prod, under which that endpoint does not exist and the identity
+    # pepper must be supplied explicitly.
+    default: dev
+
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/housing}
     username: ${DB_USER:housing}
@@ -60,6 +66,14 @@ housing:
     # quota matrix, into a versioned rule document; it lives here until then.
     ews-annual-income-limit: 300000
 
+  security:
+    jwt:
+      # Signs and verifies bearer tokens. Override in every real environment; the application
+      # refuses to start with this value outside the development profiles.
+      secret: ${HOUSING_JWT_SECRET:development-jwt-secret-not-for-production-use-32b}
+      issuer: housing-allocation
+      ttl: PT8H
+
   draw:
     # AUTHORITY_COMMITTED proves the seed did not change after it was published.
     # DRAND_BEACON proves it was never the authority's to choose. See ADR-0011 for the trade:
@@ -97,6 +111,11 @@ server:
     include-stacktrace: never
 
 management:
+  tracing:
+    sampling:
+      # Everything. At this volume the cost is negligible, and a draw that happened to be sampled
+      # out is a draw nobody can trace afterwards.
+      probability: 1.0
   endpoints:
     web:
       exposure:
@@ -116,3 +135,12 @@ info:
 logging:
   level:
     org.flywaydb: INFO
+  pattern:
+    # Correlation and trace ids on every line. A log you cannot join to a request is a log you read
+    # by guessing at timestamps.
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{correlationId:-}] [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n"
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method

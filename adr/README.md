@@ -24,3 +24,4 @@ evidence about how the system came to be shaped this way.
 | [0012](0012-the-draw-runs-as-a-job-with-retries-off.md) | The draw runs as a background job, with automatic retries off | 5 |
 | [0013](0013-explain-is-assembled-not-reconstructed.md) | The explanation is assembled from stored facts, never reconstructed | 6 |
 | [0014](0014-corrections-supersede-they-never-edit.md) | A wrong result is superseded, never corrected | 7 |
+| [0015](0015-restrict-what-influences-open-what-checks.md) | Restrict what influences the outcome; leave open what checks it | 8 |

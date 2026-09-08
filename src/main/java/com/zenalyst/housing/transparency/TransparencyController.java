@@ -2,6 +2,7 @@ package com.zenalyst.housing.transparency;
 
 import java.util.UUID;
 import org.springframework.http.HttpHeaders;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,7 +41,18 @@ public class TransparencyController {
      * <p>The applicant's endpoint. Returns the whole chain of reasoning — identity, eligibility,
      * inclusion in the frozen register, lottery rank, standing in every pool competed in, and the
      * cutoff each of those pools reached.
+     *
+     * <p><strong>An applicant sees their own file and nobody else's.</strong> The token's subject is
+     * their application number and it is compared against the one requested — the JWT principal
+     * deciding access rather than merely proving somebody logged in. Staff roles may read any file,
+     * because investigating a complaint requires it.
+     *
+     * <p>This is the one transparency endpoint that is not public. The response carries no name or
+     * address, but it does carry an applicant's category and the reasons they were found ineligible,
+     * and application numbers are sequential. Leaving it open would let anybody walk the register
+     * and build exactly the profile the rest of the system takes care not to store.
      */
+    @PreAuthorize("hasAnyRole('AUDITOR', 'OPERATOR', 'ADMIN') or authentication.name == #applicationNo")
     @GetMapping(path = "/api/v1/applications/{applicationNo}/explain",
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ExplainResponse explain(@PathVariable String applicationNo) {

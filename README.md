@@ -85,8 +85,15 @@ channels and records every acceptance in a tamper-evident log.
   original keeps its seed, its root and its allotment, and stays verifiable forever
   ([ADR-0014](adr/0014-corrections-supersede-they-never-edit.md)).
 
-Not yet built: the hardening layer — authentication, observability, OpenAPI and the seed-data
-generator.
+- **Authentication and authorisation.** JWT bearer tokens with roles. Everything that can
+  influence the outcome is restricted; everything that can check it stays open
+  ([ADR-0015](adr/0015-restrict-what-influences-open-what-checks.md)).
+- **Observability.** A correlation id on every request and log line, trace context via
+  Micrometer/OpenTelemetry, OpenAPI at `/swagger-ui.html`.
+- **A demo that runs the whole thing** — 4,000 applicants, 600 flats, then verifies the result
+  without trusting the service that produced it.
+
+That is the full build. See [`adr/`](adr/) for the fifteen decisions behind it.
 
 ---
 
@@ -99,7 +106,33 @@ ships a wrapper.
 make up       # start PostgreSQL 16
 make seed     # apply migrations, then load the demo scheme
 make run      # start the application on :8080
+
+make demo     # in another shell: run a whole scheme end to end and verify it
 ```
+
+`make demo` is the thing to run first. It drives the public API exactly as an operator and the
+public would — 4,000 people applying through both channels, certificates verified, duplicates
+resolved, the register frozen, a seed committed to and revealed, the draw executed and published —
+and then re-derives the result from what was published:
+
+```
+ 3. Importing paper applications      3,220 accepted, 0 rejected
+ 4. Submitting online applications    1,100 submitted
+ 5. Verifying certificates            4,601 recorded
+ 6. Resolving duplicates              4,320 applications -> 4,067 people
+                                      253 linked automatically, 23 awaiting a human
+ 8. Freezing the register             4,320 candidates, 3,991 eligible
+ 9. Committing to a seed              the seed itself is not in the response: True
+10. Revealing the seed                SHA-256(seed + ':' + salt) == commitment: True
+11. Drawing                           600 flats allotted
+12. Verifying                         PASS REGISTRY_ROOT  PASS SEED_COMMITMENT  PASS RULES_HASH
+                                      PASS ALLOTMENT      PASS RESULT_HASH
+                                      PASS AUDIT_CHAIN (8,930 events)
+```
+
+It takes about seven minutes at full size, most of it the online submissions and certificate
+verifications going through one at a time as they really would. `make demo-small` does the same with
+400 applicants in a few seconds.
 
 Migrations can also be applied and inspected without starting the application:
 
@@ -110,6 +143,33 @@ make schema         # print the current tables
 ```
 
 `make help` lists every target.
+
+### Authentication
+
+Endpoints that can influence the outcome need a bearer token; endpoints that check the result do
+not, and that asymmetry is the point — a verification only the authority can run proves nothing.
+
+```bash
+TOKEN=$(curl -s -X POST localhost:8080/api/v1/dev/token -H 'Content-Type: application/json' \
+  -d '{"subject":"registrar","roles":["ADMIN"]}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/registry:freeze?frozenBy=registrar' \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+| Role | May |
+|---|---|
+| *(none)* | apply, object, verify a draw, verify the audit chain, download the register and results |
+| `APPLICANT` | read **their own** file — the token's subject is their application number |
+| `OPERATOR` | import paper forms, verify certificates, run deduplication, judge fuzzy matches |
+| `AUDITOR` | read any applicant's file; change nothing |
+| `ADMIN` | publish rules, freeze, run the draw, adjudicate objections |
+
+The token endpoint exists only under the `dev` profile — `@Profile("dev")`, not a configuration
+flag, so under any other profile the bean is absent and the route 404s. Both development secrets
+(the JWT key and the identity pepper) refuse to start the application outside development.
+
+API documentation is at `/swagger-ui.html`; the JobRunr dashboard at `:8000/dashboard`.
 
 ### Container runtime
 
@@ -640,7 +700,7 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
-276 tests: 165 unit and architecture tests that need no Docker, and 111 integration tests against a
+289 tests: 165 unit and architecture tests that need no Docker, and 124 integration tests against a
 real PostgreSQL.
 
 | Suite | Count | Covers |
@@ -664,6 +724,7 @@ real PostgreSQL.
 | `SeedSourceTest` | 7 | commitment verifiability, salt, beacon refusing a future round |
 | `TransparencyIT` | 12 | explain, tamper detection in allotments, register and audit chain, CSV |
 | `ObjectionAndRedrawIT` | 13 | filing, adjudication, supersession rules, both draws still verifying |
+| `SecurityIT` | 13 | what stays open, what needs a role, per-applicant authorisation, forged tokens |
 | `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |

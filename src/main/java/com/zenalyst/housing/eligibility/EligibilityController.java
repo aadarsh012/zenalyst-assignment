@@ -10,16 +10,20 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @Validated
 public class EligibilityController {
 
     private final EligibilityService eligibility;
+    private final ClaimVerificationRecorder recorder;
 
-    public EligibilityController(EligibilityService eligibility) {
+    public EligibilityController(EligibilityService eligibility, ClaimVerificationRecorder recorder) {
         this.eligibility = eligibility;
+        this.recorder = recorder;
     }
 
     /**
@@ -48,6 +52,33 @@ public class EligibilityController {
             @Valid @RequestBody VerifyClaimRequest request,
             @RequestParam("verifiedBy") @NotBlank String verifiedBy) {
         return EligibilityView.of(eligibility.verify(applicationNo, request, verifiedBy));
+    }
+
+    /**
+     * Records many verifications at once, from a CSV of {@code application_no,claim,outcome,evidence_reference}.
+     *
+     * <p>Counter staff verify certificates in batches, not one HTTP request at a time, and a scheme
+     * with four thousand applicants has several thousand certificates to get through before the
+     * register can be frozen. Doing that one call at a time is how a verification queue stays
+     * uncleared, and an uncleared queue means applicants competing outside the category they proved
+     * (ADR-0008).
+     *
+     * <p>Each row is recorded individually, with its own audit event: bulk entry is a convenience for
+     * the operator, not a shortcut through the trail. Rows that were already decided are reported
+     * rather than overwritten.
+     */
+    @PostMapping(path = "/api/v1/schemes/{code}/verifications:import",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public VerificationImportReport importVerifications(
+            @PathVariable String code,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam("verifiedBy") @NotBlank String verifiedBy) throws java.io.IOException {
+
+        try (java.io.Reader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(file.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+            return eligibility.importVerifications(code, reader, verifiedBy, recorder);
+        }
     }
 
     /**
