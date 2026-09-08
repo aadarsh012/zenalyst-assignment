@@ -1,5 +1,9 @@
 package com.zenalyst.housing.platform;
 
+import com.zenalyst.housing.platform.security.Role;
+import com.zenalyst.housing.platform.security.TokenService;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -35,7 +39,51 @@ public abstract class AbstractIntegrationTest {
     }
 
     @Autowired
+    private TestRestTemplate anonymous;
+
+    @Autowired
+    private TokenService tokens;
+
+    /**
+     * A client carrying an administrator token.
+     *
+     * <p>Most tests are about what the system does, not about who may ask it to, so they use this
+     * and say nothing about authentication. {@code SecurityIT} is where the rules themselves are
+     * tested, and it uses {@link #anonymous()} and tokens of its own.
+     */
     protected TestRestTemplate rest;
+
+    @BeforeEach
+    void authenticateAsAdministrator() {
+        rest = withRoles("registrar", Role.ADMIN);
+    }
+
+    /** A client with no credentials at all — for the endpoints that must work without any. */
+    protected TestRestTemplate anonymous() {
+        return anonymous;
+    }
+
+    protected TestRestTemplate withRoles(String subject, Role... roles) {
+        return withHeader("Authorization", "Bearer " + tokens.issue(subject, List.of(roles)));
+    }
+
+    /**
+     * A client that adds one header to every request.
+     *
+     * <p>Built by copying the injected template's URI handler — which knows the random port the
+     * test server is on — and adding an interceptor. A fresh {@code TestRestTemplate} would not
+     * know where to send anything.
+     */
+    protected TestRestTemplate withHeader(String name, String value) {
+        TestRestTemplate client = new TestRestTemplate();
+        client.getRestTemplate().setUriTemplateHandler(
+                anonymous.getRestTemplate().getUriTemplateHandler());
+        client.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+            request.getHeaders().add(name, value);
+            return execution.execute(request, body);
+        });
+        return client;
+    }
 
     @DynamicPropertySource
     static void testProperties(DynamicPropertyRegistry registry) {

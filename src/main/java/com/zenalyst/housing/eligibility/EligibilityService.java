@@ -181,6 +181,68 @@ public class EligibilityService {
         return payload;
     }
 
+    /**
+     * Records a batch of verifications, one at a time and each with its own audit event.
+     *
+     * <p>Rows are processed independently: a bad row is reported and the rest proceed. A batch that
+     * refused entirely because of one typo would send an operator back to a spreadsheet of four
+     * thousand rows to find it.
+     */
+    public VerificationImportReport importVerifications(
+            String schemeCode, java.io.Reader csv, String verifiedBy,
+            ClaimVerificationRecorder recorder) {
+
+        Scheme scheme = schemes.findByCode(schemeCode)
+                .orElseThrow(() -> ApiException.notFound("scheme", schemeCode));
+
+        int recorded = 0;
+        int alreadyDecided = 0;
+        java.util.List<VerificationImportReport.RowOutcome> failures = new java.util.ArrayList<>();
+        int rowNumber = 1;
+
+        org.apache.commons.csv.CSVFormat format = org.apache.commons.csv.CSVFormat.DEFAULT.builder()
+                .setHeader().setSkipHeaderRecord(true).setIgnoreHeaderCase(true)
+                .setTrim(true).setIgnoreEmptyLines(true).get();
+
+        try (org.apache.commons.csv.CSVParser parser =
+                     org.apache.commons.csv.CSVParser.parse(csv, format)) {
+
+            for (org.apache.commons.csv.CSVRecord record : parser) {
+                rowNumber = (int) record.getRecordNumber() + 1;
+                String applicationNo = record.isMapped("application_no") ? record.get("application_no") : null;
+                String claim = record.isMapped("claim") ? record.get("claim") : null;
+
+                try {
+                    VerifyClaimRequest request = new VerifyClaimRequest(
+                            ClaimType.valueOf(claim),
+                            ClaimVerification.Outcome.valueOf(record.get("outcome")),
+                            record.isMapped("evidence_reference") ? record.get("evidence_reference") : null,
+                            null);
+                    recorder.record(applicationNo, request, verifiedBy);
+                    recorded++;
+
+                } catch (ApiException e) {
+                    if (e.getMessage() != null && e.getMessage().contains("already recorded")) {
+                        alreadyDecided++;
+                    } else {
+                        failures.add(new VerificationImportReport.RowOutcome(
+                                rowNumber, applicationNo, claim, e.getMessage()));
+                    }
+                } catch (RuntimeException e) {
+                    failures.add(new VerificationImportReport.RowOutcome(
+                            rowNumber, applicationNo, claim, e.getMessage()));
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new ApiException(com.zenalyst.housing.platform.error.ProblemType.MALFORMED_REQUEST,
+                    "The uploaded file could not be read as CSV: " + e.getMessage());
+        }
+
+        return new VerificationImportReport(
+                scheme.getCode(), recorded + alreadyDecided + failures.size(),
+                recorded, alreadyDecided, failures.size(), failures);
+    }
+
     /** An application together with what the rules concluded about it. */
     public record Assessment(
             Application application,

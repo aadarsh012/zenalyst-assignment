@@ -159,15 +159,40 @@ public class PaperImportService {
             return ImportRowOutcome.rejected(rowNumber, paperReference, e.violations());
 
         } catch (DataIntegrityViolationException e) {
-            // The only uniqueness this row can violate is the paper reference, which means the
-            // row was imported by an earlier run. That is a success from the operator's point of
-            // view: the form is in the register exactly once.
-            return ImportRowOutcome.alreadyImported(rowNumber, paperReference, null);
+            // A repeated paper reference means the row was imported by an earlier run, which is a
+            // success from the operator's point of view: the form is in the register exactly once.
+            //
+            // Any *other* integrity violation is a genuine problem with the row, and reporting it
+            // as "already imported" would tell the operator their data was fine when it was not.
+            // This branch previously did exactly that, and hid a set of rows whose receipt dates
+            // were in the future.
+            if (isRepeatedPaperReference(e)) {
+                return ImportRowOutcome.alreadyImported(rowNumber, paperReference, null);
+            }
+            return ImportRowOutcome.rejected(rowNumber, paperReference, List.of(
+                    FieldViolation.of("row", "REJECTED_BY_DATABASE", describeConstraint(e))));
 
         } catch (ApiException e) {
             return ImportRowOutcome.rejected(rowNumber, paperReference,
                     List.of(FieldViolation.of("received_at", "OUTSIDE_WINDOW", e.getMessage())));
         }
+    }
+
+    private static boolean isRepeatedPaperReference(DataIntegrityViolationException e) {
+        return describeConstraint(e).contains("application_paper_reference_idx");
+    }
+
+    /**
+     * The database's own account of what was wrong, which names the constraint.
+     *
+     * <p>Passed through to the operator rather than replaced with something friendlier: a violated
+     * check constraint is a statement about their data, and "submitted_before_recorded" tells
+     * somebody looking at a spreadsheet far more than "invalid row" would.
+     */
+    private static String describeConstraint(DataIntegrityViolationException e) {
+        Throwable cause = e.getMostSpecificCause();
+        String message = cause.getMessage() == null ? e.toString() : cause.getMessage();
+        return message.length() > 400 ? message.substring(0, 400) : message;
     }
 
     /**

@@ -12,6 +12,8 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -49,6 +51,35 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ProblemDetail body = base(ex.type(), ex.getMessage(), request.getRequestURI());
         ex.properties().forEach(body::setProperty);
         return ResponseEntity.status(ex.type().status()).body(body);
+    }
+
+    /**
+     * Authorisation failures, mapped explicitly.
+     *
+     * <p>These must be declared before the catch-all below, and the reason is worth recording: a
+     * blanket {@code @ExceptionHandler(Exception.class)} swallows Spring Security's
+     * {@link AccessDeniedException} and returns 500. The endpoint is secured, the caller is
+     * correctly refused, and the response says the server broke — so every authorisation failure
+     * looks like a bug and every real bug looks like an authorisation failure.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> handleAccessDenied(
+            AccessDeniedException ex, HttpServletRequest request) {
+
+        ProblemDetail body = base(ProblemType.FORBIDDEN,
+                "Your credentials do not permit this. If this is your own application, use a token "
+                        + "issued for that application number.",
+                request.getRequestURI());
+        return ResponseEntity.status(ProblemType.FORBIDDEN.status()).body(body);
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ProblemDetail> handleUnauthenticated(
+            AuthenticationException ex, HttpServletRequest request) {
+
+        ProblemDetail body = base(ProblemType.UNAUTHENTICATED,
+                "This endpoint requires a bearer token.", request.getRequestURI());
+        return ResponseEntity.status(ProblemType.UNAUTHENTICATED.status()).body(body);
     }
 
     @ExceptionHandler(Exception.class)
