@@ -28,12 +28,28 @@ public final class Hashing {
     }
 
     public static String sha256Hex(byte[] input) {
+        return toHex(sha256(input));
+    }
+
+    /** Raw digest, for callers that go on to hash the digest itself — see the Merkle tree. */
+    public static byte[] sha256(byte[] input) {
         try {
-            return toHex(MessageDigest.getInstance("SHA-256").digest(input));
+            return MessageDigest.getInstance("SHA-256").digest(input);
         } catch (NoSuchAlgorithmException e) {
             // SHA-256 is mandated by the JVM specification; its absence is not a runtime concern.
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
+    }
+
+    public static byte[] fromHex(String hex) {
+        if (hex.length() % 2 != 0) {
+            throw new IllegalArgumentException("hex string must have an even length");
+        }
+        byte[] bytes = new byte[hex.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return bytes;
     }
 
     public static String hmacSha256Hex(String key, String message) {

@@ -24,6 +24,12 @@ public enum AuditAction {
     /** A deduplication pass completed; the payload carries what it concluded. */
     DEDUPLICATION_COMPLETED,
 
+    /** An operator examined a document and recorded what they concluded about a declared claim. */
+    CLAIM_VERIFIED,
+
+    /** The candidate register was frozen; the payload carries the published root. */
+    REGISTRY_FROZEN,
+
     /**
      * An operator judged a fuzzy match. Recorded per decision rather than per pass, because this
      * is a person deciding something about another person's application and the chain should name

@@ -53,8 +53,14 @@ channels and records every acceptance in a tamper-evident log.
   readable, and can tell its applicant in plain English why it no longer competes and which of
   their applications does.
 
-Not yet built: eligibility, the registry freeze, the rules engine, the allocator, the draw itself,
-and the transparency endpoints.
+- **Eligibility as reason codes, never a boolean.** Two disqualifying rules (under age, duplicate);
+  everything else is a *claim* that costs the applicant a benefit if unverified but never their
+  place in the draw ([ADR-0008](adr/0008-unverified-claims-do-not-disqualify.md)).
+- **Registry freeze.** An immutable, Merkle-hashed snapshot of who is in the draw and on what
+  terms, published *before* any seed exists, with per-applicant inclusion proofs
+  ([ADR-0009](adr/0009-freeze-before-the-draw.md)).
+
+Not yet built: the rules engine, the allocator, the draw itself, and the transparency endpoints.
 
 ---
 
@@ -114,6 +120,11 @@ that has no tables in it. Run `colima stop` before switching.
 | `GET` | `/api/v1/applications/{applicationNo}/identity` | Does this application still compete, and if not why |
 | `GET` | `/api/v1/schemes/{code}/duplicate-reviews` | The fuzzy matches awaiting a human |
 | `POST` | `/api/v1/duplicate-reviews/{id}/decision` | Record an operator's judgement |
+| `GET` | `/api/v1/applications/{applicationNo}/eligibility` | Every rule applied, and its outcome |
+| `POST` | `/api/v1/applications/{applicationNo}/verifications` | Record that a document was examined |
+| `POST` | `/api/v1/schemes/{code}/registry:freeze` | Freeze the register and publish its root |
+| `GET` | `/api/v1/registry/{root}/candidates` | The published rows behind a root |
+| `GET` | `/api/v1/registry/{root}/proof/{applicationNo}` | One applicant's inclusion proof |
 | `GET` | `/actuator/health` | Liveness, including database connectivity |
 
 ### Submitting online
@@ -197,6 +208,52 @@ curl -s -X POST "localhost:8080/api/v1/duplicate-reviews/$REVIEW_ID/decision?dec
 A decision takes effect immediately, and the response is the fresh report. Rejections are
 remembered, so re-running never asks the same question twice.
 
+### Eligibility and the registry freeze
+
+```bash
+curl -s localhost:8080/api/v1/applications/MHS-2026-000001/eligibility
+```
+
+Every rule applied, with a stable code and plain-English detail. Only two rules disqualify —
+being under age at the scheme's closing date, and being a duplicate. Everything else is a *claim*:
+an unverified category certificate means competing on open merit, not exclusion. The response
+names the documents still outstanding.
+
+```bash
+curl -s -X POST 'localhost:8080/api/v1/applications/MHS-2026-000001/verifications?verifiedBy=clerk-anita' \
+  -H 'Content-Type: application/json' \
+  -d '{"claim":"CATEGORY","outcome":"VERIFIED","evidenceReference":"CERT-SC-4471"}'
+
+curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/registry:freeze?frozenBy=registrar-1'
+```
+
+Freezing publishes a **Merkle root** over every candidate row and a **hash of the rules** they were
+judged by. The root commits the authority to an exact candidate list; the rules hash commits it to
+the thresholds. Both are published before any seed exists — an authority that could still change
+the list after seeing the seed could choose the outcome.
+
+Freeze twice with nothing changed and the root is identical. Change one applicant's effective
+category and it changes.
+
+### Verifying a frozen register yourself
+
+The offer this system makes is that you do not have to trust it. `scripts/verify-registry.py` is
+the independent check — standard library only, no shared code with the service, about fifteen lines
+of actual Merkle logic:
+
+```bash
+python3 scripts/verify-registry.py <registry-root> MHS-2026-000002
+```
+
+It downloads the published rows, rebuilds the tree, and compares its own root with the published
+one. Given an application number it also checks that applicant's inclusion proof — roughly twelve
+hashes for a register of four thousand, small enough to hand someone on a printed page.
+
+The published rows carry only what decides allocation: application number, effective category,
+gender, the horizontal flags, eligibility and its reason codes. No names, addresses, phone numbers
+or identity tokens. Ineligible applicants appear too, with their reasons — four thousand people
+applied, and the register must account for all four thousand.
+
 ### Reading an application back
 
 ```bash
@@ -264,6 +321,13 @@ the decisions behind it live in `duplicate_review` and the audit chain.
 the system, and deliberately so: this is where a person decides something about another person's
 application, and it should be unambiguous who decided what and when.
 
+**`claim_verification`** — one operator decision per declared claim per application, immutable.
+Absence of a row is a third state: nobody has looked yet, which is not the same as refusal.
+
+**`frozen_registry`** / **`frozen_candidate`** — the snapshot the draw will run against, and its
+published root. `canonical_json` is stored verbatim because it is the preimage of the leaf hash: a
+verifier hashes those exact bytes rather than trusting our re-derivation.
+
 **`audit_event`** — an append-only, hash-chained record of every decision-affecting act.
 
 Each row carries `prev_hash`, the hash of its predecessor, and its own `hash` over its canonical
@@ -306,6 +370,8 @@ com.zenalyst.housing
 ├── intake/          both channels, normalisation, CSV import, idempotency
 ├── normalisation/   pure functions reducing input to comparable form
 ├── identity/        fingerprinting, the merge graph, the review queue
+├── eligibility/     the rules, claim verification, reason codes
+├── registry/        the freeze, the Merkle tree, inclusion proofs
 ├── audit/           the hash chain
 └── platform/        errors, hashing, idempotency, clock
 ```
@@ -331,7 +397,7 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
-132 tests: 90 unit and architecture tests that need no Docker, and 42 integration tests against a
+189 tests: 132 unit and architecture tests that need no Docker, and 57 integration tests against a
 real PostgreSQL.
 
 | Suite | Count | Covers |
@@ -345,7 +411,10 @@ real PostgreSQL.
 | `IdempotencyIT` | 4 | replay fidelity, key reuse, concurrent submission |
 | `MergeGraphTest` | 9 | transitivity, canonical selection, order-independence |
 | `FingerprintsTest` | 6 | determinism, tier separation, field-boundary forgery |
+| `MerkleTreeTest` | 26 | proofs at every size, tamper resistance, CVE-2012-2459, domain separation |
+| `EligibilityEvaluatorTest` | 16 | disqualifying vs claim rules, the reference date, EWS |
 | `DeduplicationIT` | 12 | all four tiers, review decisions, re-run idempotency |
+| `RegistryFreezeIT` | 15 | reason codes, verification, root determinism, inclusion proofs |
 | `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |

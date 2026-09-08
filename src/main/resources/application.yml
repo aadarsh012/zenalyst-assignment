@@ -52,6 +52,14 @@ housing:
     # tickets in the draw. It is set to err towards the former.
     name-similarity-threshold: 0.80
 
+  eligibility:
+    # Age is measured at the scheme's closing date, not at the moment the check runs, so that
+    # every applicant is judged at the same instant however long processing takes.
+    minimum-age: 18
+    # Annual household income ceiling for an EWS claim to stand. Phase 4 moves this, with the
+    # quota matrix, into a versioned rule document; it lives here until then.
+    ews-annual-income-limit: 300000
+
 server:
   port: 8080
   error:
