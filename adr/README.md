@@ -19,3 +19,4 @@ evidence about how the system came to be shaped this way.
 | [0007](0007-duplicate-links-are-derived-not-accumulated.md) | Duplicate links are rebuilt on every run, not accumulated | 2 |
 | [0008](0008-unverified-claims-do-not-disqualify.md) | An unverified claim costs the benefit, never the place | 3 |
 | [0009](0009-freeze-before-the-draw.md) | Freeze the register, and publish its root, before any seed exists | 3 |
+| [0010](0010-open-seats-first-and-horizontal-carve-outs.md) | Fill open seats first; carve horizontal reservations out of each pool | 4 |

@@ -30,6 +30,12 @@ public enum AuditAction {
     /** The candidate register was frozen; the payload carries the published root. */
     REGISTRY_FROZEN,
 
+    /** A quota matrix was drafted. */
+    RULE_VERSION_CREATED,
+
+    /** A quota matrix was put in force, superseding its predecessor. */
+    RULE_VERSION_ACTIVATED,
+
     /**
      * An operator judged a fuzzy match. Recorded per decision rather than per pass, because this
      * is a person deciding something about another person's application and the chain should name
