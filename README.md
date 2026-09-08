@@ -193,7 +193,7 @@ that can be quietly amended proves nothing. See
 
 ## The API
 
-35 endpoints. The ones worth looking at:
+36 endpoints, two of them development only. The ones worth looking at:
 
 | | |
 |---|---|
@@ -211,7 +211,7 @@ that can be quietly amended proves nothing. See
 ### Applying
 
 ```bash
-curl -s -X POST localhost:8080/api/v1/schemes/MHS-2026/applications \
+curl -s -X POST localhost:8080/api/v1/schemes/DEMO-2026/applications \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: my-key-1' \
   -d '{"fullName":"Ramesh Kumar","dateOfBirth":"1990-02-01",
        "governmentId":"234567890124","phone":"+91 98765 43210",
@@ -231,8 +231,10 @@ thrown away: only a scheme-scoped HMAC and the last four digits are stored. See
 
 ### Explaining an outcome
 
+Application numbers are `{schemeCode}-{sequence}`. `make demo` prints a real one to try at the end of its run.
+
 ```bash
-curl -s localhost:8080/api/v1/applications/DEMO-000021/explain \
+curl -s localhost:8080/api/v1/applications/DEMO-2026-000021/explain \
   -H "Authorization: Bearer $TOKEN"
 ```
 ```
@@ -244,7 +246,7 @@ pool, where you were ranked 60. If the 47 ahead of you give up a flat, yours is 
   OPEN   you ranked 60 of 60   seats 12   merit cutoff at rank 12
 
 check it yourself:
-  - Your place in the draw is HMAC-SHA256(seed, "DEMO-000021") = fd9134fe…
+  - Your place in the draw is HMAC-SHA256(seed, "DEMO-2026-000021") = fd9134fe…
     Work it out yourself; it depends on nothing but those two values.
   - Your row was one of the inputs: combine canonicalJson with inclusionProof
     to get the registry root 3fc6b93d…
