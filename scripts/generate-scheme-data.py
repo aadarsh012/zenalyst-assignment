@@ -3,9 +3,9 @@
 
 Writes three files to build/demo/:
 
-    paper.csv          applications to import through the paper channel
-    online.ndjson      applications to POST one at a time, as the public would
-    verifications.csv  the certificate decisions counter staff would record
+    paper.csv      applications to import through the paper channel
+    online.ndjson  applications to POST one at a time, as the public would
+    claims.csv     the certificate decisions counter staff would record
 
 The population is deliberately awkward, because a clean one proves nothing:
 
@@ -16,8 +16,9 @@ The population is deliberately awkward, because a clean one proves nothing:
   * a slice are under age at the closing date and will be found ineligible
   * a slice have certificates nobody verifies, so they compete on open merit
 
-Deterministic: the same seed produces the same population, so a demo can be
-re-run and compared.
+Deterministic: --seed and --as-of together fix the population completely, so
+two runs on different days produce byte-identical files and a demo can be
+re-run and compared. Nothing here reads the wall clock.
 
     python3 scripts/generate-scheme-data.py --scheme MHS-2026 --count 4000
 """
@@ -28,6 +29,7 @@ import datetime
 import json
 import pathlib
 import random
+import sys
 
 # --- Verhoeff, so every generated identity number passes validation ----------
 
@@ -41,6 +43,12 @@ _P = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
       [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
       [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]]
 _INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]
+
+# The scheme window the demo creates its scheme with, and the default cutoff for receipt dates.
+# All three are constants on purpose: the wall clock must not reach into this file.
+SCHEME_OPENED = datetime.date(2026, 1, 1)
+SCHEME_CLOSED = datetime.date(2026, 12, 31)
+DEFAULT_AS_OF = datetime.date(2026, 6, 30)
 
 
 def identity_number(index: int) -> str:
@@ -61,13 +69,15 @@ CATEGORY_WEIGHTS = [0.42, 0.27, 0.15, 0.07, 0.09]
 WARDS = [f"W-{n:02d}" for n in range(1, 13)]
 
 
-def receipt_date(rng: random.Random) -> str:
-    """A date in the scheme's window that has already happened."""
-    today = datetime.date.today()
-    opened = datetime.date(2026, 1, 1)
-    latest = min(today, datetime.date(2026, 12, 31))
-    span = (latest - opened).days
-    return (opened + datetime.timedelta(days=rng.randint(0, max(span, 0)))).isoformat()
+def receipt_date(rng: random.Random, opened: datetime.date, latest: datetime.date) -> str:
+    """A date in the scheme's window that has already happened.
+
+    The span is passed in rather than derived from today's date. Deriving it from the clock made
+    the range one day wider every day, which shifted every draw taken from `rng` afterwards and
+    quietly broke the reproducibility this generator advertises.
+    """
+    span = max((latest - opened).days, 0)
+    return (opened + datetime.timedelta(days=rng.randint(0, span))).isoformat()
 
 
 def misspell(name: str, rng: random.Random) -> str:
@@ -81,8 +91,23 @@ def main() -> int:
     parser.add_argument("--scheme", default="MHS-2026")
     parser.add_argument("--count", type=int, default=4000, help="distinct people")
     parser.add_argument("--seed", type=int, default=20260908)
+    parser.add_argument("--as-of", default=DEFAULT_AS_OF.isoformat(),
+                        help="latest receipt date to generate. Fixed, not today's date, so that "
+                             "the population is reproducible. Must not be in the future: the "
+                             "service rejects a form recorded before it was received.")
     parser.add_argument("--out", default="build/demo")
     args = parser.parse_args()
+
+    as_of = datetime.date.fromisoformat(args.as_of)
+    today = datetime.date.today()
+    if as_of > today:
+        print(f"--as-of {as_of} is in the future; today is {today}. Every generated form would "
+              f"be rejected as received after it was recorded. Pass --as-of {today} or earlier.",
+              file=sys.stderr)
+        return 1
+
+    opened = SCHEME_OPENED
+    latest = min(as_of, SCHEME_CLOSED)
 
     rng = random.Random(args.seed)
     out = pathlib.Path(args.out)
@@ -160,7 +185,7 @@ def main() -> int:
         # Receipt dates must be in the past: a form cannot have been handed in after it was typed
         # up, and the database says so.
         for a in paper:
-            writer.writerow([a["ref"], receipt_date(rng),
+            writer.writerow([a["ref"], receipt_date(rng, opened, latest),
                              a["name"], a["dob"], a["id"], a["phone"], a["email"],
                              a["address"], a["ward"], a["category"], a["gender"],
                              str(a["local"]).lower(), str(a["disability"]).lower(),
@@ -202,6 +227,7 @@ def main() -> int:
 
     print(f"scheme          : {args.scheme}")
     print(f"distinct people : {args.count}")
+    print(f"seed / as-of    : {args.seed} / {as_of}")
     print(f"applications    : {len(applications)}  ({duplicate_count} of them repeat submissions)")
     print(f"  paper         : {len(paper)}")
     print(f"  online        : {len(online)}")

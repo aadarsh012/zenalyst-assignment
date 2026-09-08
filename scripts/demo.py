@@ -91,6 +91,7 @@ def main():
 
     step(1, f"Generating a population of {args.count:,} people")
     subprocess.run([sys.executable, "scripts/generate-scheme-data.py",
+                    "--scheme", args.scheme,
                     "--count", str(args.count), "--out", args.out], check=True)
     out = pathlib.Path(args.out)
 
