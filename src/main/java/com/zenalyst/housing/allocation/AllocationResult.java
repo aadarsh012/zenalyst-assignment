@@ -25,6 +25,30 @@ public record AllocationResult(
         meritOrder = List.copyOf(meritOrder);
     }
 
+    /**
+     * A single value standing for the entire allotment.
+     *
+     * <p>Published with the result so that a recomputation can be compared in one line rather than
+     * by diffing six hundred rows by eye. Defined as the SHA-256 of the canonical JSON array of
+     * every award — application number, pool, basis and rank — in published order.
+     *
+     * <p>Deliberately covers the awards only. The merit order is derivable from the seed and the
+     * frozen register by anybody, so hashing it would add length without adding commitment.
+     */
+    public String resultHash() {
+        com.fasterxml.jackson.databind.node.ArrayNode array =
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+        for (SeatAward award : awards) {
+            com.fasterxml.jackson.databind.node.ObjectNode node = array.addObject();
+            node.put("applicationNo", award.applicationNo());
+            node.put("basis", award.basis().name());
+            node.put("pool", award.pool().name());
+            node.put("poolRank", award.poolRank());
+        }
+        return com.zenalyst.housing.platform.hash.Hashing.sha256Hex(
+                com.zenalyst.housing.platform.hash.CanonicalJson.render(array));
+    }
+
     public Map<String, SeatAward> awardsByApplication() {
         return awards.stream().collect(java.util.stream.Collectors.toMap(
                 SeatAward::applicationNo, award -> award,

@@ -69,8 +69,16 @@ channels and records every acceptance in a tamper-evident log.
   database, no clock, no randomness but the seed, enforced by ArchUnit.
 - **Dry runs.** Rehearse a draw against a frozen register and an active matrix, and keep none of it.
 
-Not yet built: the draw ceremony itself (seed commitment and reveal, persistence), and the
-transparency endpoints.
+- **The draw ceremony.** Commit to a seed, reveal it, execute as a persisted background job,
+  publish. Each boundary removes a way of choosing an outcome rather than discovering one
+  ([ADR-0011](adr/0011-commit-reveal-and-why-a-beacon-is-stronger.md),
+  [ADR-0012](adr/0012-the-draw-runs-as-a-job-with-retries-off.md)).
+- **Two seed sources.** A hash commitment that works offline, and a public randomness beacon that
+  takes the choice of seed away from the authority entirely.
+- **Published results are immutable**, enforced by database trigger.
+
+Not yet built: the transparency endpoints — per-applicant explanations and independent verification
+of a published draw.
 
 ---
 
@@ -139,6 +147,11 @@ that has no tables in it. Run `colima stop` before switching.
 | `POST` | `/api/v1/schemes/{code}/rules/{version}:activate` | Put a matrix in force |
 | `GET` | `/api/v1/schemes/{code}/rules` | Every version, superseded ones included |
 | `POST` | `/api/v1/schemes/{code}/draws:dry-run` | Rehearse a draw; persists nothing |
+| `POST` | `/api/v1/schemes/{code}/draws` | Create a draw and publish its seed commitment |
+| `POST` | `/api/v1/draws/{id}/reveal` | Publish the seed |
+| `POST` | `/api/v1/draws/{id}/execute` | Queue the draw (`202`); poll for `COMPLETED` |
+| `POST` | `/api/v1/draws/{id}/publish` | Declare the result final and immutable |
+| `GET` | `/api/v1/draws/{id}` | Draw status and everything published about it |
 | `GET` | `/actuator/health` | Liveness, including database connectivity |
 
 ### Submitting online
@@ -293,6 +306,50 @@ get different names and reasonably conclude we had cheated.
 
 Reservations that cannot be filled are **reported as unfilled**, not quietly ignored.
 
+### The draw
+
+```bash
+D=$(curl -s -X POST 'localhost:8080/api/v1/schemes/MHS-2026/draws?committedBy=registrar-1' \
+      | python3 -c 'import sys,json;print(json.load(sys.stdin)["drawId"])')
+
+curl -s -X POST "localhost:8080/api/v1/draws/$D/reveal?revealedBy=registrar-1"
+curl -s -X POST "localhost:8080/api/v1/draws/$D/execute?executedBy=registrar-1"   # 202
+curl -s "localhost:8080/api/v1/draws/$D"                                          # poll for COMPLETED
+curl -s -X POST "localhost:8080/api/v1/draws/$D/publish?publishedBy=commissioner"
+```
+
+Four steps, because each boundary removes a way of choosing an outcome rather than discovering one.
+**Commit** fixes the register and the quota matrix and publishes `SHA-256(seed ‖ ":" ‖ salt)` — the
+response contains no seed at all. **Reveal** discloses it, after which anyone can check:
+
+```python
+hashlib.sha256((seed + ":" + salt).encode()).hexdigest() == seedCommitment
+```
+
+**Execute** returns `202` and runs as a JobRunr job. Two simultaneous calls produce exactly one
+execution — the status transition happens under a row lock. **Publish** makes the result final, and
+a database trigger then refuses any change to the draw or its allotments.
+
+#### What the commitment does and does not prove
+
+A hash commitment proves the seed did not change after it was published. It does **not** prove the
+seed was not *chosen*: with the register already frozen, an authority could try a thousand seeds
+locally and publish the commitment for the one it liked. Every artefact would still verify.
+
+That is why `DRAND_BEACON` exists. Set `HOUSING_DRAW_SEED_SOURCE=DRAND_BEACON` and the commitment
+becomes a *round number* of the League of Entropy's public beacon, roughly ten minutes in the
+future. The authority cannot know what that round will contain, so there is nothing to shop for, and
+verification needs nothing from this system:
+
+```bash
+curl -s https://api.drand.sh/public/<round>   # its randomness is the seed
+```
+
+The weaker mechanism is the default because it works without a third party being reachable. A scheme
+where the outcome genuinely matters should use the beacon — see
+[ADR-0011](adr/0011-commit-reveal-and-why-a-beacon-is-stronger.md), which states the gap rather than
+glossing it.
+
 ### Verifying a frozen register yourself
 
 The offer this system makes is that you do not have to trust it. `scripts/verify-registry.py` is
@@ -386,6 +443,15 @@ Absence of a row is a third state: nobody has looked yet, which is not the same 
 published root. `canonical_json` is stored verbatim because it is the preimage of the leaf hash: a
 verifier hashes those exact bytes rather than trusting our re-derivation.
 
+**`draw`** — one draw: the frozen register, the rule version, and the seed commitment, fixed
+together. Its `registry_root` and `rules_hash` are *copied*, not just referenced: a foreign key says
+which row was used, a copied hash says what that row contained.
+
+**`allotment`** / **`draw_ranking`** / **`draw_waitlist`** / **`draw_pool`** — the result, written
+once in a single transaction and refused `UPDATE` and `DELETE` by trigger. `draw_ranking` holds the
+*whole* merit order, not just the winners: three and a half thousand people will not get a flat and
+each is entitled to know where they came.
+
 **`audit_event`** — an append-only, hash-chained record of every decision-affecting act.
 
 Each row carries `prev_hash`, the hash of its predecessor, and its own `hash` over its canonical
@@ -432,7 +498,7 @@ com.zenalyst.housing
 ├── registry/        the freeze, the Merkle tree, inclusion proofs
 ├── rules/           versioned, hashed quota matrices
 ├── allocation/      ★ PURE: the allocator, pools, tickets, waitlists
-├── draw/            running the draw (dry runs for now)
+├── draw/            the ceremony: commit, reveal, execute, publish
 ├── audit/           the hash chain
 └── platform/        errors, hashing, idempotency, clock
 ```
@@ -458,7 +524,7 @@ make test     # architecture tests — fast, no Docker required
 make verify   # everything, including Testcontainers integration tests
 ```
 
-230 tests: 158 unit and architecture tests that need no Docker, and 72 integration tests against a
+251 tests: 165 unit and architecture tests that need no Docker, and 86 integration tests against a
 real PostgreSQL.
 
 | Suite | Count | Covers |
@@ -478,6 +544,8 @@ real PostgreSQL.
 | `AllocatorTest` | 26 | migration rule, displacement, determinism, invariants, a 4,000→600 draw |
 | `RegistryFreezeIT` | 15 | reason codes, verification, root determinism, inclusion proofs |
 | `DryRunIT` | 15 | matrix validation, activation, rehearsal, frozen-snapshot isolation |
+| `DrawCeremonyIT` | 13 | commit/reveal/execute/publish, exactly-once, immutability, audit order |
+| `SeedSourceTest` | 7 | commitment verifiability, salt, beacon refusing a future round |
 | `AuditChainIT` | 4 | the chain recomputes end to end from stored fields |
 | `BaselineSchemaIT` | 6 | migrations applied, entity/schema agreement, append-only enforcement |
 | `SchemeApiIT` | 3 | HTTP layer, error model, health |
