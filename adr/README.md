@@ -17,3 +17,5 @@ evidence about how the system came to be shaped this way.
 | [0005](0005-submission-date-is-not-the-data-entry-date.md) | The submission date is not the data-entry date | 1 |
 | [0006](0006-fuzzy-matches-are-never-merged-automatically.md) | Fuzzy matches are never merged automatically | 2 |
 | [0007](0007-duplicate-links-are-derived-not-accumulated.md) | Duplicate links are rebuilt on every run, not accumulated | 2 |
+| [0008](0008-unverified-claims-do-not-disqualify.md) | An unverified claim costs the benefit, never the place | 3 |
+| [0009](0009-freeze-before-the-draw.md) | Freeze the register, and publish its root, before any seed exists | 3 |
