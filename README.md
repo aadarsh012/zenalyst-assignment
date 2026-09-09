@@ -17,12 +17,52 @@ Java 17, Spring Boot 3.5, PostgreSQL 16, Flyway, JobRunr. 290 tests.
 
 ## Run it
 
-You need Docker, Java 17 and `make`. Maven ships with the repo.
+### Install what you need
+
+One time setup. Maven is not on this list: the repo ships its own (`./mvnw`).
+
+**Docker Desktop.** Download it from
+[docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/), install it,
+and start it. PostgreSQL runs inside Docker, so there is no database to install yourself.
+
+**Java 17.**
+
+```bash
+# macOS
+brew install openjdk@17
+sudo ln -sfn $(brew --prefix)/opt/openjdk@17/libexec/openjdk.jdk \
+             /Library/Java/JavaVirtualMachines/openjdk-17.jdk
+
+# Debian or Ubuntu
+sudo apt install openjdk-17-jdk
+```
+
+Homebrew does not put Java on your path by itself. The symlink is what lets macOS find it. Check
+with `java -version`, which should report 17.
+
+**make, git and Python 3.** On macOS all three come with the Xcode command line tools:
+
+```bash
+xcode-select --install
+```
+
+On Debian or Ubuntu: `sudo apt install make git python3`.
+
+Python runs the demo and the verification script. They use only the standard library, so any
+version from 3.8 up is fine.
+
+**jq** is optional. One example further down uses it to pull a token out of a response:
+`brew install jq`, or `sudo apt install jq`.
+
+### Start it
 
 ```bash
 make up      # PostgreSQL 16 in Docker
 make run     # the application on :8080, leave this running
 ```
+
+Use `make`, not `./mvnw` directly. The Makefile points `JAVA_HOME` at your Java 17 install, so
+`make` works even when your shell has no Java on its path.
 
 Then in another shell:
 
